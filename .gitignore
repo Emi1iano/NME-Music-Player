@@ -1,0 +1,4 @@
+backend/client/.zig-cache
+backend/server/.zig-cache
+backend/client/zig-out
+backend/server/zig-out
