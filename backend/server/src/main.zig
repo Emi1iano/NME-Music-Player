@@ -24,24 +24,22 @@ const CONNECTIONS = struct {
     fn cleanUp() !void {
 
     }
-    fn pairUp(io: Io) !void {
+    fn pairUp(io: Io, server_spcket: *std.Io.net.Socket) !void {
         for (0..CLIENTS.len) |x| {
             for (x+1..CLIENTS.len) |y| {
                 if (CLIENTS[x] == null or CLIENTS[y] == null) continue;
                 if (std.mem.eql(u8, &CLIENTS[x].?.key, &CLIENTS[y].?.key)) {
                     const client1 = CLIENTS[x].?.ip;
                     const client2 = CLIENTS[y].?.ip;
-                    std.debug.print("{any}: {any}\n", .{client1, client2});
-                    const client1_socket = try client1.bind(io, .{ .mode = .dgram });
-                    const client2_socket = try client2.bind(io, .{ .mode = .dgram });
-
                     
+                    var buffer: [6]u8 = undefined;
 
-                    try client1_socket.send(io, &client2, &CLIENTS[y].?.key);
-                    try client2_socket.send(io, &client1, &CLIENTS[x].?.key);
+                    try server_spcket.send(io, &client1, formatIp(client2, &buffer));
+                    try server_spcket.send(io, &client2, formatIp(client1, &buffer));
 
-                    client1_socket.close(io);
-                    client2_socket.close(io);
+                    CLIENTS[x] = null;
+                    CLIENTS[y] = null;
+                    CLIENTS_SIZE -= 2; 
                 }
             }
         } 
@@ -71,7 +69,7 @@ fn mainThread(init: std.process.Init) !void {
             var conn = Connection {.ip = message.from, .timestamp = std.Io.Timestamp.now(init.io, .awake)};
             @memcpy(&conn.key, message.data[0..8]);
             try CONNECTIONS.add(conn);
-            try CONNECTIONS.pairUp(init.io);
+            try CONNECTIONS.pairUp(init.io, &server_socket);
         }
     }
 }
@@ -81,4 +79,15 @@ fn workerThread(init: std.process.Init) !void {
 
         try init.io.sleep(.fromSeconds(1), .awake);
     }
+}
+fn formatIp(ip: std.Io.net.IpAddress, buffer: []u8) []u8 {
+    @memcpy(buffer[0..4], &ip.ip4.bytes);
+    buffer[4] = 0x0; buffer[5] = 0x0;
+
+    const port = ip.ip4.port;
+    buffer[4] |= @truncate(port >> 8);
+    buffer[5] |= @truncate(port);
+
+    std.debug.print("{b:0>16} : {b:0>8}{b:0>8}\n", .{ip.ip4.port, buffer[4], buffer[5]});
+    return buffer;
 }
