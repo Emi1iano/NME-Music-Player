@@ -47,6 +47,8 @@ const CONNECTIONS = struct {
 };
 // Wait for 2 clients to connect with the same password/key
 // Connect them to each other
+//TODO: if two clients on the same network fix that
+// maybe use a map to store clients with key
 pub fn main(init: std.process.Init) !void {
     const thread = try std.Thread.spawn(.{}, workerThread, .{init});
     try mainThread(init);
