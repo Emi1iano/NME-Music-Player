@@ -2,3 +2,11 @@ backend/client/.zig-cache
 backend/server/.zig-cache
 backend/client/zig-out
 backend/server/zig-out
+# Flutter (frontend/windows)
+frontend/windows/build/
+frontend/windows/.dart_tool/
+frontend/windows/windows/flutter/ephemeral/
+frontend/windows/.flutter-plugins
+frontend/windows/.flutter-plugins-dependencies
+frontend/windows/*.iml
+frontend/windows/.idea/
