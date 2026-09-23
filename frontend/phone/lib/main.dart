@@ -19,6 +19,8 @@ Future<void> main() async {
     androidNotificationOngoing: true,
   );
 
+  // Load everything saved on the phone before showing the first screen.
+  // Stats first, because the player writes into it as soon as music plays.
   await Stats.instance.init();
   await Player.instance.init();
   await Playlists.instance.init();
@@ -29,7 +31,8 @@ Future<void> main() async {
   runApp(const NmeMusicApp());
 }
 
-// 2. The root widget of your app setting up basic configuration/theming
+// 2. The root widget of your app setting up basic configuration/theming.
+// It's Stateful only so it can watch the app lifecycle (foreground/background).
 class NmeMusicApp extends StatefulWidget {
   const NmeMusicApp({super.key});
 
@@ -63,7 +66,7 @@ class _NmeMusicAppState extends State<NmeMusicApp> {
       debugShowCheckedModeBanner: false,
       theme: buildDarkTheme(), // Dark theme for a modern music player look
       themeMode: ThemeMode.dark,
-      home: const HomeShell(),
+      home: const HomeShell(), // 3. The tabbed home screen (Songs/Albums/Artists/Playlists)
     );
   }
 }

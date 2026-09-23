@@ -11,6 +11,7 @@ import '../theme.dart';
 import '../widgets/artwork.dart';
 import '../widgets/common.dart';
 
+/// Opens the full-screen player. Any screen can call this.
 void openNowPlaying(BuildContext context) {
   Navigator.of(context).push(MaterialPageRoute(
     fullscreenDialog: true, // slides up from the bottom
@@ -18,6 +19,13 @@ void openNowPlaying(BuildContext context) {
   ));
 }
 
+/// The Now Playing screen from the sketch, top to bottom:
+/// ✕ close, cover art, title/artist + ≡+ and ⋯, seek bar,
+/// shuffle / previous / play / next / repeat, then queue and output buttons.
+///
+/// Each part is its own small widget (_TitleRow, _SeekBar, _Controls,
+/// _BottomRow) that listens only to the player data it needs, so e.g. the
+/// seek bar updating every moment doesn't redraw the whole screen.
 class NowPlayingScreen extends StatelessWidget {
   const NowPlayingScreen({super.key});
 
@@ -73,6 +81,8 @@ class NowPlayingScreen extends StatelessWidget {
   }
 }
 
+/// Song title, artist, the live "N plays • X listened" line, and the
+/// add-to-playlist (≡+) and more (⋯) buttons.
 class _TitleRow extends StatelessWidget {
   final Track? track;
   const _TitleRow({required this.track});
@@ -96,6 +106,7 @@ class _TitleRow extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 16, color: AppColors.textSecondary)),
+              // Listens to Stats so the play count / time update every second.
               if (track != null)
                 ListenableBuilder(
                   listenable: Stats.instance,
@@ -124,6 +135,7 @@ class _TitleRow extends StatelessWidget {
     );
   }
 
+  /// The ⋯ menu (a bottom sheet that slides up).
   void _showMore(BuildContext context, Track track) {
     showModalBottomSheet<void>(
       context: context,
@@ -150,6 +162,7 @@ class _TitleRow extends StatelessWidget {
     );
   }
 
+  /// "Song info" dialog: tags from the file plus its PlaybackStats.
   void _showInfo(BuildContext context, Track track) {
     final library = Library.instance;
     final stats = Stats.instance.of(track.id);
@@ -195,6 +208,7 @@ class _TitleRow extends StatelessWidget {
   }
 }
 
+/// The progress slider with elapsed / total time underneath.
 class _SeekBar extends StatefulWidget {
   const _SeekBar();
 
@@ -225,6 +239,8 @@ class _SeekBarState extends State<_SeekBar> {
                 value: pos,
                 max: max > 0 ? max : 1,
                 onChanged: max > 0 ? (v) => setState(() => _dragValue = v) : null,
+                // While dragging we only move the slider (_dragValue); the
+                // actual seek happens once, when the finger lets go.
                 onChangeEnd: (v) {
                   audio.seek(Duration(milliseconds: v.round()));
                   setState(() => _dragValue = null);
@@ -255,6 +271,8 @@ class _SeekBarState extends State<_SeekBar> {
   );
 }
 
+/// Shuffle, previous, play/pause, next, repeat. Each button listens to its
+/// own player stream so its icon/color always matches the real state.
 class _Controls extends StatelessWidget {
   const _Controls();
 
@@ -342,6 +360,7 @@ class _Controls extends StatelessWidget {
   }
 }
 
+/// Queue (≡) and output-device buttons at the very bottom.
 class _BottomRow extends StatelessWidget {
   const _BottomRow();
 
@@ -355,6 +374,8 @@ class _BottomRow extends StatelessWidget {
           icon: const Icon(Icons.format_list_bulleted_rounded),
           onPressed: () => _showQueue(context),
         ),
+        // Placeholder: Flutter can't open the AirPlay/Bluetooth picker without
+        // an extra plugin, so for now this just tells the user where to find it.
         IconButton(
           tooltip: 'Output device',
           icon: Icon(Platform.isIOS ? Icons.airplay_rounded : Icons.speaker_group_rounded),
@@ -368,6 +389,8 @@ class _BottomRow extends StatelessWidget {
     );
   }
 
+  /// "Up next" sheet: the queue in play order (shuffled order if shuffle is
+  /// on). Tap a song to jump to it.
   void _showQueue(BuildContext context) {
     final player = Player.instance;
     showModalBottomSheet<void>(

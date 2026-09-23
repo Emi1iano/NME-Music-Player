@@ -12,25 +12,33 @@ import 'stats.dart';
 /// The single audio player for the whole app. Also records play counts and
 /// listening time into [Stats].
 class Player {
+  // Singleton: one player for the whole app (Player.instance).
   Player._();
   static final Player instance = Player._();
 
+  // just_audio's player does the actual decoding and playback.
+  // Screens listen to its "streams" (playingStream, positionStream, ...) to
+  // update the play button, seek bar, etc. in real time.
   final AudioPlayer audio = AudioPlayer();
 
   /// The tracks currently loaded, in original (unshuffled) order.
   List<Track> _queue = [];
 
   // Listening-stats bookkeeping for the current "listen" of a track.
-  Timer? _ticker;
-  int _listenedThisPlay = 0;
-  bool _countedThisPlay = false;
+  Timer? _ticker;                 // fires once per second
+  int _listenedThisPlay = 0;      // seconds heard since this listen started
+  bool _countedThisPlay = false;  // so one listen only adds ONE to playCount
 
   Future<void> init() async {
+    // Tell the phone we're a music app (pauses for calls, ducks for
+    // navigation voice, etc.).
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
 
     // A new track (or the same one looping) starts a new listen.
     audio.currentIndexStream.listen((_) => _startNewListen());
+    // "Discontinuity" = the position jumped: the song auto-advanced
+    // (including repeat-one looping) or the user seeked back to the start.
     audio.positionDiscontinuityStream.listen((d) {
       final restarted = d.reason == PositionDiscontinuityReason.seek &&
           d.event.updatePosition < const Duration(seconds: 2) &&
@@ -39,6 +47,7 @@ class Player {
         _startNewListen();
       }
     });
+    // Check every second whether music is playing, and record it.
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
   }
 
@@ -46,9 +55,12 @@ class Player {
 
   List<Track> get queue => _queue;
 
+  /// Emits the new current track whenever the song changes, so screens like
+  /// Now Playing and the mini player can update.
   Stream<Track?> get currentTrackStream =>
       audio.sequenceStateStream.map((_) => currentTrack);
 
+  /// The track that's playing right now (or null if nothing is loaded).
   Track? get currentTrack {
     final index = audio.currentIndex;
     if (index == null || index >= _queue.length) return null;
@@ -64,6 +76,9 @@ class Player {
     final start = index ?? (useShuffle ? Random().nextInt(tracks.length) : 0);
 
     _queue = List.of(tracks);
+    // Hand the whole list to the player as a queue. Each song gets a
+    // MediaItem "tag" — that's the title/artist/art shown on the lock screen
+    // and in the notification.
     await audio.setAudioSources(
       [
         for (final track in _queue)
@@ -95,6 +110,7 @@ class Player {
     audio.play();
   }
 
+  /// The big play/pause button.
   Future<void> togglePlay() async => audio.playing ? audio.pause() : audio.play();
 
   /// Like most players: restart the song if we're past 3 seconds.
@@ -108,6 +124,8 @@ class Player {
 
   Future<void> next() => audio.seekToNext();
 
+  /// Turns shuffle on/off. Turning it on makes a fresh random order
+  /// (the current song stays first).
   Future<void> toggleShuffle() async {
     final enable = !audio.shuffleModeEnabled;
     if (enable) await audio.shuffle();
@@ -121,6 +139,7 @@ class Player {
         LoopMode.one => LoopMode.off,
       });
 
+  /// Resets the per-listen counters when a song starts (again).
   void _startNewListen() {
     _listenedThisPlay = 0;
     _countedThisPlay = false;
@@ -130,15 +149,20 @@ class Player {
   /// and counts one play once you've heard 30 seconds (or half of a short song).
   void _tick() {
     final track = currentTrack;
+    // Only count time when sound is actually coming out
+    // (not paused, not still loading/buffering).
     if (track == null ||
         !audio.playing ||
         audio.processingState != ProcessingState.ready) {
       return;
     }
+    // 1) Playtime: every second of listening adds 1 second.
     final stats = Stats.instance;
     stats.addPlaytime(track.id, 1);
     _listenedThisPlay++;
 
+    // 2) Play count: a "play" counts after 30 seconds, or half the song if
+    //    it's shorter than a minute (similar to how Spotify counts streams).
     final length = track.durationSeconds > 0
         ? track.durationSeconds
         : (audio.duration?.inSeconds ?? 0);

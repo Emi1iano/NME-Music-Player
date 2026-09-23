@@ -8,17 +8,23 @@ import 'package:path_provider/path_provider.dart';
 import '../models/playlist.dart';
 
 /// Playlists are saved as JSON in the app's private support folder.
+///
+/// Playlist objects are immutable (final fields), so every edit builds an
+/// updated copy with copyWith() and swaps it into the list (see _replace).
 class Playlists extends ChangeNotifier {
+  // Singleton: one shared playlist store (Playlists.instance).
   Playlists._();
   static final Playlists instance = Playlists._();
 
-  late File _file;
+  late File _file;            // playlists.json on the phone
   List<Playlist> _items = [];
 
   List<Playlist> get items => _items;
 
+  /// Finds a playlist by id (null if it was deleted).
   Playlist? byId(String id) => _items.where((pl) => pl.id == id).firstOrNull;
 
+  /// Loads saved playlists from disk at startup.
   Future<void> init() async {
     final dir = await getApplicationSupportDirectory();
     _file = File(p.join(dir.path, 'playlists.json'));
@@ -34,6 +40,8 @@ class Playlists extends ChangeNotifier {
 
   Future<Playlist> create(String name) async {
     final playlist = Playlist(
+      // The current time in microseconds makes a unique id (same "pl_" style
+      // as the mock data).
       id: 'pl_${DateTime.now().microsecondsSinceEpoch}',
       name: name,
       trackIds: [],
@@ -65,6 +73,7 @@ class Playlists extends ChangeNotifier {
         current.copyWith(trackIds: current.trackIds.where((id) => id != trackId).toList()));
   }
 
+  /// Drag-to-reorder: take the track out at [from] and put it back at [to].
   Future<void> moveTrack(Playlist playlist, int from, int to) {
     final current = byId(playlist.id) ?? playlist;
     final ids = List.of(current.trackIds);
@@ -72,12 +81,15 @@ class Playlists extends ChangeNotifier {
     return _replace(current, current.copyWith(trackIds: ids));
   }
 
+  // Swap the old version of a playlist for its updated copy, then save.
   Future<void> _replace(Playlist old, Playlist updated) async {
     final i = _items.indexWhere((pl) => pl.id == old.id);
     if (i >= 0) _items[i] = updated;
     await _save();
   }
 
+  // Redraw any screens showing playlists, then write them all to disk as
+  // JSON using each playlist's toMap().
   Future<void> _save() async {
     notifyListeners();
     await _file.writeAsString(jsonEncode(_items.map((e) => e.toMap()).toList()));

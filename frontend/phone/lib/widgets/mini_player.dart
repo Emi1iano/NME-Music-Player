@@ -14,11 +14,13 @@ class MiniPlayer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final player = Player.instance;
+    // Rebuilds whenever the song changes.
     return StreamBuilder<Track?>(
       stream: player.currentTrackStream,
       initialData: player.currentTrack,
       builder: (context, snapshot) {
         final track = snapshot.data;
+        // Nothing loaded yet -> take up no space at all.
         if (track == null) return const SizedBox.shrink();
         return Material(
           color: AppColors.surfaceHigh,
@@ -44,6 +46,7 @@ class MiniPlayer extends StatelessWidget {
                     ],
                   ),
                 ),
+                // Play/pause icon follows whether audio is actually playing.
                 StreamBuilder<bool>(
                   stream: player.audio.playingStream,
                   initialData: player.audio.playing,

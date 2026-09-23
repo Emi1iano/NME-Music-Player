@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+// All the app's colors in one place, so the look can be changed by editing
+// this file only. (0xFF = fully opaque, then the usual RRGGBB hex color.)
 class AppColors {
   static const background = Color(0xFF0E0E11);
   static const surface = Color(0xFF1A1A1F);
@@ -10,6 +12,9 @@ class AppColors {
   static const divider = Color(0xFF2A2A31);
 }
 
+// Builds the dark Material 3 theme used by MaterialApp in main.dart.
+// Setting styles here (nav bar, slider, sheets...) means individual screens
+// don't have to style each widget themselves.
 ThemeData buildDarkTheme() {
   final scheme = ColorScheme.fromSeed(
     seedColor: AppColors.accent,

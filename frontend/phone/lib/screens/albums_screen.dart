@@ -43,8 +43,11 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
                   a.title.toLowerCase().contains(q) ||
                   library.artistName(a.artistId).toLowerCase().contains(q))
               .toList();
+          // Every song from the visible albums, for the Play / Shuffle buttons.
           final allTracks = [for (final a in albums) ...library.tracksOf(a)];
 
+          // CustomScrollView + "slivers" lets the title, search bar, buttons
+          // and grid all scroll together as one page.
           return CustomScrollView(slivers: [
             const SliverToBoxAdapter(child: PageTitle('Albums')),
             SliverToBoxAdapter(
@@ -76,6 +79,8 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                 sliver: SliverGrid.builder(
+                  // Cards are at most 220px wide: 2 columns on a phone,
+                  // more on a tablet, automatically.
                   gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                     maxCrossAxisExtent: 220,
                     mainAxisSpacing: 20,
@@ -93,11 +98,13 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
   }
 }
 
+// "Artist  •  2021" (year left out when unknown, i.e. releaseYear == 0).
 String _albumLine(Album album) {
   final artist = Library.instance.artistName(album.artistId);
   return album.releaseYear > 0 ? '$artist  •  ${album.releaseYear}' : artist;
 }
 
+/// One square in the grid: cover, album name, artist • year.
 class _AlbumCard extends StatelessWidget {
   final Album album;
   const _AlbumCard({required this.album});
@@ -106,6 +113,8 @@ class _AlbumCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () => openAlbum(context, album),
+      // LayoutBuilder tells us how wide the grid cell is, so the cover can
+      // be a perfect square that fills it.
       child: LayoutBuilder(
         builder: (context, constraints) => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -127,6 +136,7 @@ class _AlbumCard extends StatelessWidget {
   }
 }
 
+/// Opens an album's page with its songs in track order.
 void openAlbum(BuildContext context, Album album) {
   final tracks = Library.instance.tracksOf(album);
   final totalSeconds = tracks.fold(0, (sum, t) => sum + t.durationSeconds);

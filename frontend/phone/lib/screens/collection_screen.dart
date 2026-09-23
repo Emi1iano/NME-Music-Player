@@ -9,6 +9,8 @@ import '../widgets/track_tile.dart';
 import 'now_playing_screen.dart';
 
 /// Detail page for an album or artist: big art, title, Play / Shuffle, songs.
+/// One reusable screen for both — the Albums and Artists tabs just pass in
+/// different titles, pictures and track lists.
 class CollectionScreen extends StatelessWidget {
   final String title;
   final String subtitle;
@@ -39,6 +41,7 @@ class CollectionScreen extends StatelessWidget {
         initialData: player.currentTrack,
         builder: (context, snapshot) => ListView.builder(
           padding: const EdgeInsets.only(bottom: 16),
+          // +1 because row 0 is the header (art, title, buttons), then the songs.
           itemCount: tracks.length + 1,
           itemBuilder: (context, i) {
             if (i == 0) {
@@ -68,6 +71,8 @@ class CollectionScreen extends StatelessWidget {
               openNowPlaying(context);
             }
 
+            // Album pages show "1  Song title  3:07" like a track listing;
+            // artist pages use the normal row with cover art.
             if (showTrackNumbers) {
               return ListTile(
                 onTap: play,

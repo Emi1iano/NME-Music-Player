@@ -74,6 +74,7 @@ String? _artistImage(Artist artist) {
   return artist.imageUrl ?? library.coverFor(library.tracksBy(artist))?.artworkPath;
 }
 
+/// One row: round picture, name, and a › arrow.
 class _ArtistTile extends StatelessWidget {
   final Artist artist;
   const _ArtistTile({required this.artist});
@@ -93,6 +94,7 @@ class _ArtistTile extends StatelessWidget {
   }
 }
 
+/// Opens an artist's page with all of their songs.
 void openArtist(BuildContext context, Artist artist) {
   final library = Library.instance;
   final tracks = library.tracksBy(artist);

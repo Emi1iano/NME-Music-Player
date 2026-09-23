@@ -19,9 +19,10 @@ class SongsScreen extends StatefulWidget {
 }
 
 class _SongsScreenState extends State<SongsScreen> {
-  final _search = TextEditingController();
+  final _search = TextEditingController(); // holds the search box text
   String _query = '';
 
+  /// Songs whose title, artist or album contains the search text.
   List<Track> _filtered(Library library) {
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return library.tracks;
@@ -33,6 +34,7 @@ class _SongsScreenState extends State<SongsScreen> {
         .toList();
   }
 
+  // Controllers must be disposed when the screen goes away to free memory.
   @override
   void dispose() {
     _search.dispose();
@@ -44,8 +46,11 @@ class _SongsScreenState extends State<SongsScreen> {
     final library = Library.instance;
     final player = Player.instance;
 
+    // SafeArea keeps content out from under the notch/status bar.
     return SafeArea(
       bottom: false,
+      // Rebuilds this whole screen whenever the Library changes
+      // (scan finished, sort changed, ...).
       child: ListenableBuilder(
         listenable: library,
         builder: (context, _) {
@@ -73,6 +78,7 @@ class _SongsScreenState extends State<SongsScreen> {
     );
   }
 
+  /// The song list, or a spinner / empty message / "No matches" instead.
   Widget _buildList(BuildContext context, Library library, List<Track> tracks) {
     if (library.scanning && library.tracks.isEmpty) {
       return const Center(child: CircularProgressIndicator());
@@ -86,11 +92,16 @@ class _SongsScreenState extends State<SongsScreen> {
 
     final player = Player.instance;
     final showPlays = library.sortMode == SortMode.mostPlayed;
+    // RefreshIndicator = pull down to rescan the Music folder.
     return RefreshIndicator(
       onRefresh: library.scan,
+      // StreamBuilder rebuilds when the current song changes, so the playing
+      // song is highlighted in the list.
       child: StreamBuilder<Track?>(
         stream: player.currentTrackStream,
         initialData: player.currentTrack,
+        // ListView.separated only builds the rows that are on screen, so it
+        // stays fast even with thousands of songs.
         builder: (context, snapshot) => ListView.separated(
           padding: const EdgeInsets.only(bottom: 8),
           itemCount: tracks.length,
@@ -104,10 +115,12 @@ class _SongsScreenState extends State<SongsScreen> {
                   ? Text(plural(Stats.instance.of(track.id).playCount, 'play'),
                       style: const TextStyle(color: AppColors.textSecondary))
                   : null,
+              // Tap: play the list starting at this song and open Now Playing.
               onTap: () {
                 player.playTracks(tracks, index: i);
                 openNowPlaying(context);
               },
+              // Long-press: add to a playlist.
               onLongPress: () => showAddToPlaylist(context, track),
             );
           },
@@ -117,6 +130,7 @@ class _SongsScreenState extends State<SongsScreen> {
   }
 }
 
+/// Settings button on the left; refresh and sort buttons on the right.
 class _TopBar extends StatelessWidget {
   final Library library;
   const _TopBar({required this.library});
@@ -163,6 +177,7 @@ class _TopBar extends StatelessWidget {
   }
 }
 
+/// Shown when the Music folder has no songs yet: explains how to add some.
 class _EmptyLibrary extends StatelessWidget {
   final Library library;
   const _EmptyLibrary({required this.library});

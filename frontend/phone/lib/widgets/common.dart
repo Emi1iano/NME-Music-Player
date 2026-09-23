@@ -5,7 +5,11 @@ import '../models/track.dart';
 import '../services/playlists.dart';
 import '../theme.dart';
 
+// Small building blocks shared by several screens, so they look and behave
+// the same everywhere.
+
 /// The rounded "Play" / "Shuffle" pair from the landing page.
+/// Pass null for a callback to show the button greyed out (e.g. no songs).
 class PlayShuffleButtons extends StatelessWidget {
   final VoidCallback? onPlay;
   final VoidCallback? onShuffle;
@@ -58,6 +62,7 @@ class LibrarySearchBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      // Rebuild as the user types so the ✕ clear button appears/disappears.
       child: ListenableBuilder(
         listenable: controller,
         builder: (context, _) => SearchBar(
@@ -101,6 +106,8 @@ class PageTitle extends StatelessWidget {
       );
 }
 
+/// Pop-up with a text box, used to name/rename playlists.
+/// Returns the typed name, or null if cancelled or left empty.
 Future<String?> askForName(BuildContext context,
     {required String title, String initial = '', String action = 'Create'}) {
   final controller = TextEditingController(text: initial);
@@ -127,7 +134,10 @@ Future<String?> askForName(BuildContext context,
 }
 
 /// Bottom sheet that adds [track] to an existing or new playlist.
+/// Used by the ≡+ button and long-pressing a song.
 Future<void> showAddToPlaylist(BuildContext context, Track track) async {
+  // Grab the messenger now: the sheet closes before we show the
+  // "Added to ..." message, and we still need a valid place to show it.
   final messenger = ScaffoldMessenger.of(context);
   final playlists = Playlists.instance;
 
@@ -171,6 +181,8 @@ Future<void> showAddToPlaylist(BuildContext context, Track track) async {
   ));
 }
 
+// ---- Text formatting helpers (covered by tests in test/widget_test.dart) ----
+
 /// 0:05, 3:07, 1:02:03
 String formatDuration(Duration? d) {
   if (d == null) return '--:--';
@@ -180,6 +192,8 @@ String formatDuration(Duration? d) {
   return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:$s' : '$m:$s';
 }
 
+/// Same as formatDuration but from whole seconds (Track.durationSeconds).
+/// 0 means "unknown length".
 String formatSeconds(int seconds) =>
     seconds > 0 ? formatDuration(Duration(seconds: seconds)) : '--:--';
 
@@ -192,4 +206,5 @@ String formatListenTime(int seconds) {
   return m == 0 ? '${minutes ~/ 60} hr' : '${minutes ~/ 60} hr $m min';
 }
 
+/// "1 play" / "4 plays", "1 song" / "12 songs".
 String plural(int n, String word) => '$n ${n == 1 ? word : '${word}s'}';

@@ -7,6 +7,7 @@ import '../services/library.dart';
 import '../theme.dart';
 import 'stats_screen.dart';
 
+/// Instructions for adding songs, different on iPhone vs Android.
 String howToAddMusic() {
   if (Platform.isIOS) {
     return 'Open the Files app → On My iPhone → NME Music → Music, and put your '
@@ -19,6 +20,8 @@ String howToAddMusic() {
       '${i >= 0 ? path.substring(i) : path}';
 }
 
+/// Opened from the ⚙ button: music folder info, rescan, and listening stats.
+/// (The Sync section for pairing devices will go here next.)
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
@@ -84,6 +87,7 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
+/// Small colored section title, e.g. "LIBRARY".
 class _Header extends StatelessWidget {
   final String text;
   const _Header(this.text);

@@ -14,8 +14,10 @@ import '../models/artist.dart';
 import '../models/track.dart';
 import 'stats.dart';
 
+// The ways the Songs tab can be ordered (chosen with the ⇅ button).
 enum SortMode { title, artist, recentlyAdded, mostPlayed }
 
+// Gives each SortMode a human-readable name for the sort menu.
 extension SortModeLabel on SortMode {
   String get label => switch (this) {
         SortMode.title => 'Title',
@@ -25,37 +27,50 @@ extension SortModeLabel on SortMode {
       };
 }
 
+// Only files ending in one of these are treated as songs.
 const audioExtensions = {
   '.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus', //
 };
 
 /// Finds every song in the app's Music folder and turns it into
 /// [Track], [Album] and [Artist] objects.
+///
+/// It's a ChangeNotifier: whenever the library changes it calls
+/// notifyListeners(), and every screen wrapped in a ListenableBuilder
+/// redraws itself automatically.
 class Library extends ChangeNotifier {
+  // Singleton: the private constructor + static instance means the whole
+  // app shares ONE library (Library.instance) instead of creating copies.
   Library._();
   static final Library instance = Library._();
 
-  late Directory musicDir;
-  late Directory _artDir;
+  late Directory musicDir;   // Where the user puts their songs
+  late Directory _artDir;    // Where we cache cover images pulled out of the files
 
+  // The data the screens show.
   List<Track> _tracks = [];
   List<Album> _albums = [];
   List<Artist> _artists = [];
+
+  // Lookup tables ("maps") so we can find things by id instantly instead of
+  // searching through the whole list every time.
   final _trackById = <String, Track>{};
   final _albumById = <String, Album>{};
-  final _albumTracks = <String, List<Track>>{};
-  final _artistTracks = <String, List<Track>>{};
-  final _artistNames = <String, String>{};
+  final _albumTracks = <String, List<Track>>{};   // albumId  -> its tracks
+  final _artistTracks = <String, List<Track>>{};  // artistId -> their tracks
+  final _artistNames = <String, String>{};        // artistId -> display name
 
   SortMode _sortMode = SortMode.title;
-  bool scanning = true;
-  bool _scanInProgress = false;
+  bool scanning = true;           // true while the folder is being read (shows a spinner)
+  bool _scanInProgress = false;   // stops two scans from running at the same time
 
+  // Read-only access for the screens (they can look but not change the lists).
   List<Track> get tracks => _tracks;
   List<Album> get albums => _albums;
   List<Artist> get artists => _artists;
   SortMode get sortMode => _sortMode;
 
+  // Helpers so screens can turn an id into something they can display.
   Track? trackById(String id) => _trackById[id];
   Album? albumById(String id) => _albumById[id];
   String artistName(String artistId) => _artistNames[artistId] ?? 'Unknown Artist';
@@ -77,6 +92,8 @@ class Library extends ChangeNotifier {
   Track? coverFor(List<Track> tracks) =>
       tracks.where((t) => t.artworkPath != null).firstOrNull ?? tracks.firstOrNull;
 
+  /// Runs once at startup: finds/creates the Music folder and loads the
+  /// saved sort choice.
   Future<void> init() async {
     // Android: /storage/emulated/0/Android/data/<app id>/files/Music
     //   (reachable from a PC over USB).
@@ -91,29 +108,36 @@ class Library extends ChangeNotifier {
     _artDir = Directory(p.join((await getApplicationCacheDirectory()).path, 'art'));
     await _artDir.create(recursive: true);
 
+    // SharedPreferences = small key/value storage that survives app restarts.
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getInt('sortMode') ?? 0;
     _sortMode = SortMode.values[saved.clamp(0, SortMode.values.length - 1)];
   }
 
+  /// Reads every song in the Music folder and rebuilds the library.
+  /// Called at startup and whenever the user taps refresh / pulls down.
   Future<void> scan() async {
     if (_scanInProgress) return;
     _scanInProgress = true;
     scanning = true;
-    notifyListeners();
+    notifyListeners(); // show the loading spinner
     try {
       final musicPath = musicDir.path;
       final artPath = _artDir.path;
+      // Isolate.run = do the heavy file reading on a separate thread,
+      // so the UI stays smooth even with thousands of songs.
       final files = await Isolate.run(() => _scanFolder(musicPath, artPath));
       _build(files);
       _sort();
     } finally {
+      // "finally" runs even if something above failed, so the spinner never gets stuck.
       _scanInProgress = false;
       scanning = false;
       notifyListeners();
     }
   }
 
+  /// Changes the Songs tab order and remembers the choice for next time.
   Future<void> setSortMode(SortMode mode) async {
     _sortMode = mode;
     _sort();
@@ -129,13 +153,18 @@ class Library extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Turns the raw file info from the scan into our Track / Album / Artist
+  /// models and fills in all the lookup tables.
   void _build(List<_ScannedFile> files) {
+    // Start from a clean slate every scan.
     _trackById.clear();
     _albumById.clear();
     _albumTracks.clear();
     _artistTracks.clear();
     _artistNames.clear();
 
+    // Artist ids are made from the name in lowercase, so "DNCE" and "dnce"
+    // end up as the same artist.
     String artistIdFor(String name) {
       final id = 'artist:${name.toLowerCase()}';
       _artistNames.putIfAbsent(id, () => name);
@@ -153,6 +182,8 @@ class Library extends ChangeNotifier {
     final tracks = <Track>[];
     final albums = <Album>[];
     byAlbum.forEach((albumId, group) {
+      // Pick who the album belongs to: the "album artist" tag if a file has
+      // it, otherwise the one artist on every song, otherwise "Various Artists".
       final artistNames = group.map((f) => f.artist.toLowerCase()).toSet();
       final albumArtist = group.map((f) => f.albumArtist).nonNulls.firstOrNull ??
           (artistNames.length == 1 ? group.first.artist : 'Various Artists');
@@ -168,8 +199,12 @@ class Library extends ChangeNotifier {
       albums.add(album);
       _albumById[albumId] = album;
 
+      // Create a Track for every song on this album.
       for (final f in group) {
         final track = Track(
+          // The id is the path INSIDE the Music folder (e.g. "Album/song.mp3"),
+          // so the same song has the same id on every device — this is what
+          // the backend's "update [path] ..." commands will refer to.
           id: f.relativePath,
           title: f.title,
           artistId: artistIdFor(f.artist),
@@ -188,6 +223,7 @@ class Library extends ChangeNotifier {
       }
     });
 
+    // Album order: disc 1 before disc 2, then by track number, then by title.
     int trackOrder(Track a, Track b) {
       final disc = (a.discNumber ?? 1).compareTo(b.discNumber ?? 1);
       if (disc != 0) return disc;
@@ -209,6 +245,7 @@ class Library extends ChangeNotifier {
     ]..sort((a, b) => _cmp(a.name, b.name));
   }
 
+  /// Re-orders the Songs tab list based on the current [SortMode].
   void _sort() {
     switch (_sortMode) {
       case SortMode.title:
@@ -230,10 +267,12 @@ class Library extends ChangeNotifier {
     }
   }
 
+  // Case-insensitive A–Z comparison ("apple" and "Apple" sort together).
   static int _cmp(String a, String b) => a.toLowerCase().compareTo(b.toLowerCase());
 }
 
-/// What the background scan reads from one file.
+/// What the background scan reads from one file. It's a plain data holder
+/// that gets passed back from the background thread to the main app.
 class _ScannedFile {
   final String path;
   final String relativePath;
@@ -279,6 +318,7 @@ List<_ScannedFile> _scanFolder(String musicPath, String artPath) {
     Duration? duration;
 
     try {
+      // Read the song's tags (ID3 for mp3, etc.), including the cover image.
       final meta = readMetadata(file, getImage: true);
       title = meta.title;
       artist = meta.artist;
@@ -315,11 +355,13 @@ List<_ScannedFile> _scanFolder(String musicPath, String artPath) {
   return results;
 }
 
+// Returns [value], or [fallback] if the tag was missing or blank.
 String _orElse(String? value, String fallback) =>
     (value == null || value.trim().isEmpty) ? fallback : value.trim();
 
 /// Writes the song's cover to the cache so both the UI and the lock screen
-/// can load it from a file.
+/// can load it from a file. The file name is an md5 hash of the song path,
+/// so each song always maps to the same image file.
 String? _saveCover(
     List<Picture> pictures, String songPath, DateTime modified, String artPath) {
   if (pictures.isEmpty) return null;

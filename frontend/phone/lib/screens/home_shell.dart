@@ -15,11 +15,13 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  int _tab = 0;
+  int _tab = 0; // which bottom tab is selected
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // IndexedStack keeps all four tabs alive and only shows one, so each tab
+      // remembers its scroll position and search text when you switch away.
       body: IndexedStack(
         index: _tab,
         children: const [
@@ -29,12 +31,15 @@ class _HomeShellState extends State<HomeShell> {
           PlaylistsScreen(),
         ],
       ),
+      // Bottom area = mini player (only visible while a song is loaded)
+      // stacked on top of the tab bar.
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           const MiniPlayer(),
           NavigationBar(
             selectedIndex: _tab,
+            // setState() tells Flutter to rebuild this widget with the new tab.
             onDestinationSelected: (i) => setState(() => _tab = i),
             destinations: const [
               NavigationDestination(icon: Icon(Icons.music_note_rounded), label: 'Songs'),

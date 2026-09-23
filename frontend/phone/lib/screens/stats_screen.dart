@@ -39,6 +39,8 @@ class StatsScreen extends StatelessWidget {
           ),
         ],
       ),
+      // Listenable.merge = rebuild when EITHER the stats or the library change,
+      // so the numbers update live while a song plays.
       body: ListenableBuilder(
         listenable: Listenable.merge([stats, library]),
         builder: (context, _) {
@@ -73,6 +75,7 @@ class StatsScreen extends StatelessWidget {
                     style: TextStyle(color: AppColors.textSecondary),
                   ),
                 ),
+              // ".indexed" gives (position, item) pairs so we can show 1, 2, 3...
               for (final (i, s) in top.indexed)
                 Builder(builder: (context) {
                   final track = library.trackById(s.trackId)!;
@@ -116,6 +119,7 @@ class StatsScreen extends StatelessWidget {
   }
 }
 
+/// One of the two big number boxes at the top ("Total plays", "Time listened").
 class _StatCard extends StatelessWidget {
   final String label;
   final String value;

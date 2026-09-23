@@ -5,12 +5,14 @@ import '../services/library.dart';
 import '../theme.dart';
 import 'artwork.dart';
 
+/// One song row: cover, title, artist. Reused by the Songs tab, artist
+/// pages, and anywhere else a list of songs is shown.
 class TrackTile extends StatelessWidget {
   final Track track;
-  final bool isCurrent;
+  final bool isCurrent;            // highlights the title if this song is playing
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
-  final Widget? trailing;
+  final Widget? trailing;          // optional thing on the right, e.g. "3 plays"
 
   const TrackTile({
     super.key,
@@ -37,6 +39,7 @@ class TrackTile extends StatelessWidget {
           color: isCurrent ? AppColors.accent : AppColors.textPrimary,
         ),
       ),
+      // Track only stores artistId, so look up the name to display.
       subtitle: Text(
         Library.instance.artistName(track.artistId),
         maxLines: 1,

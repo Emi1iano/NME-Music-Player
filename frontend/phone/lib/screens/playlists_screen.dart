@@ -10,6 +10,7 @@ import '../widgets/artwork.dart';
 import '../widgets/common.dart';
 import 'now_playing_screen.dart';
 
+/// The Playlists tab: a list of your playlists plus a + button to make one.
 class PlaylistsScreen extends StatelessWidget {
   const PlaylistsScreen({super.key});
 
@@ -86,6 +87,8 @@ class PlaylistsScreen extends StatelessWidget {
 List<Track> tracksIn(Playlist playlist) =>
     playlist.trackIds.map(Library.instance.trackById).nonNulls.toList();
 
+/// One playlist: Play / Shuffle, drag handles to reorder, swipe left to remove,
+/// and a ⋮ menu to rename or delete.
 class PlaylistDetailScreen extends StatelessWidget {
   // Playlist objects are replaced on every edit, so look it up by id.
   final String playlistId;
@@ -171,6 +174,7 @@ class PlaylistDetailScreen extends StatelessWidget {
   }
 }
 
+/// The reorderable, swipe-to-delete song list inside a playlist.
 class _PlaylistTracks extends StatelessWidget {
   final Playlist playlist;
   final List<Track> tracks;
@@ -191,6 +195,8 @@ class _PlaylistTracks extends StatelessWidget {
       },
       itemBuilder: (context, i) {
         final track = tracks[i];
+        // Dismissible = swipe the row away. The key tells Flutter which row is
+        // which, so the right song disappears.
         return Dismissible(
           key: ValueKey(track.id),
           direction: DismissDirection.endToStart,
