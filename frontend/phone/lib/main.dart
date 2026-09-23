@@ -1,56 +1,69 @@
 import 'package:flutter/material.dart';
-import 'data/mock_data.dart';
+import 'package:just_audio_background/just_audio_background.dart';
+
+import 'screens/home_shell.dart';
+import 'services/library.dart';
+import 'services/player.dart';
+import 'services/playlists.dart';
+import 'services/stats.dart';
+import 'theme.dart';
 
 // 1. The entry point of your Flutter application
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Background playback + lock screen / notification controls.
+  await JustAudioBackground.init(
+    androidNotificationChannelId: 'com.example.phone.audio',
+    androidNotificationChannelName: 'Music playback',
+    androidNotificationOngoing: true,
+  );
+
+  await Stats.instance.init();
+  await Player.instance.init();
+  await Playlists.instance.init();
+  await Library.instance.init();
+  // Don't block startup on the folder scan; the list fills in when it's done.
+  Library.instance.scan();
+
   runApp(const NmeMusicApp());
 }
 
 // 2. The root widget of your app setting up basic configuration/theming
-class NmeMusicApp extends StatelessWidget {
+class NmeMusicApp extends StatefulWidget {
   const NmeMusicApp({super.key});
+
+  @override
+  State<NmeMusicApp> createState() => _NmeMusicAppState();
+}
+
+class _NmeMusicAppState extends State<NmeMusicApp> {
+  late final AppLifecycleListener _lifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    // Save listening stats right away when the app goes to the background.
+    _lifecycle = AppLifecycleListener(
+      onPause: Stats.instance.flush,
+      onDetach: Stats.instance.flush,
+    );
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'NME Music Player',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(), // Dark theme for a modern music player look
-      home: const HomeScreen(),
-    );
-  }
-}
-
-// 3. A basic starting screen to render your mock tracks
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    // Accessing your mock tracks from lib/data/mock_data.dart
-    final tracks = MockData.tracks;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('NME Library'),
-      ),
-      body: ListView.builder(
-        itemCount: tracks.length,
-        itemBuilder: (context, index) {
-          final track = tracks[index];
-          final stats = MockData.stats[track.id];
-
-          return ListTile(
-            leading: const Icon(Icons.music_note),
-            title: Text(track.title),
-            subtitle: Text('Duration: ${track.durationSeconds}s'),
-            trailing: Text('Plays: ${stats?.playCount ?? 0}'),
-            onTap: () {
-              // Playback control logic will go here later
-            },
-          );
-        },
-      ),
+      theme: buildDarkTheme(), // Dark theme for a modern music player look
+      themeMode: ThemeMode.dark,
+      home: const HomeShell(),
     );
   }
 }

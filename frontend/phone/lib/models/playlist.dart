@@ -19,4 +19,13 @@ class Playlist {
       trackIds: List<String>.from(map['trackIds'] ?? []),
     );
   }
+
+  // Converts a Playlist back into a Map for saving/sending.
+  Map<String, dynamic> toMap() => {'id': id, 'name': name, 'trackIds': trackIds};
+
+  Playlist copyWith({String? name, List<String>? trackIds}) => Playlist(
+        id: id,
+        name: name ?? this.name,
+        trackIds: trackIds ?? List.of(this.trackIds),
+      );
 }
