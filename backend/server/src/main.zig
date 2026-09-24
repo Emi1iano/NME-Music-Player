@@ -7,9 +7,13 @@ var CLIENTS: [MAX_CONNECTIONS]?Connection = [_]?Connection{null} ** MAX_CONNECTI
 var CLIENTS_SIZE: usize = 0;
 const CONNECTIONS = struct {
     fn add(conn: Connection) !void {
-        for (CLIENTS) |client| {
-            if (client == null) continue;
-            if (client.?.ip.eql(&conn.ip)) return error.ClientAlreadyWaiting;
+        for (&CLIENTS) |*client| {
+            if (client.* == null) continue;
+            //if (client.?.ip.eql(&conn.ip)) return error.ClientAlreadyWaiting;
+            if (client.*.?.ip.eql(&conn.ip)) {
+                client.* = conn;
+                return;
+            }
         }
         for (&CLIENTS) |*client| {
             if (client.* == null) {
@@ -78,7 +82,8 @@ fn mainThread(init: std.process.Init) !void {
             const local_ip = bufToIp(message.data[0..6].*);
             const b = message.from.ip4.bytes;
             const key = message.data[6..14];
-            try print(init.io, "\x1b[1A{d}.{d}.{d}.{d}:{d} Connected with key: {s}\x1b[1E\n", .{b[0], b[1], b[2], b[3], message.from.getPort(), key});
+            try print(init.io, "\x1b[1APublic: {d}.{d}.{d}.{d}:{d}, Local: {d}.{d}.{d}.{d}:{d} Connected with key: {s}\x1b[1E\n", 
+            .{b[0], b[1], b[2], b[3], message.from.getPort(), message.data[0], message.data[1], message.data[2], message.data[3], local_ip.getPort(), key});
 
             var conn = Connection {.ip = message.from, .timestamp = std.Io.Timestamp.now(init.io, .awake)};
             @memcpy(&conn.key, key);
@@ -87,10 +92,10 @@ fn mainThread(init: std.process.Init) !void {
             if (aux != 0) conn.local_ip = local_ip; 
 
             CONNECTIONS.add(conn) catch |err| switch (err) {
-                error.ClientAlreadyWaiting => {
-                    try print(init.io, "\x1b[1A{any}\x1b[1E\n", .{err});
-                    continue;
-                },
+                // error.ClientAlreadyWaiting => {
+                //     try print(init.io, "\x1b[1A{any}\x1b[1E\n", .{err});
+                //     continue;
+                // },
                 else => {},
             };
             try CONNECTIONS.pairUp(init.io, &server_socket);

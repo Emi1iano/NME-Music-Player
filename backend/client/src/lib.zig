@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const api = @import("api.zig");
 const Io = std.Io;
 
 pub fn handleArgs(io: Io, args: []const [:0]const u8) !void {
@@ -41,6 +40,12 @@ pub fn handleArgs(io: Io, args: []const [:0]const u8) !void {
     } else if (std.mem.eql(u8, args[1], "sync_new_key")) {
         std.debug.print("Generating new key\n", .{});
         _ = try SYNCING.generateNewKey(io);
+    } else if (std.mem.eql(u8, args[1], "rename")) {
+        if (args.len != 4) return error.InvalidArgs;
+        try EDITING.renameFile(io, args[2], args[3]);
+    } else if (std.mem.eql(u8, args[1], "add")) {
+        if (args.len != 3) return error.InvalidArgs;
+        try EDITING.add(io, args[2]);
     }
 }
 
@@ -59,8 +64,13 @@ const SYNCING = struct {
         try client_socket.send(io, &server, &info);
 
         var buffer: [1024]u8 = undefined;
-        var message = try client_socket.receive(io, &buffer);
+        var message: std.Io.net.IncomingMessage = undefined;
 
+        // TODO: MAKE BETTER
+        while (true)  {
+            message = try client_socket.receive(io, &buffer);
+            if (message.data.len != 5) continue;
+        }
         if (message.data.len != 6) return error.ErrorGettingOtherClientIp;
 
         const other_client = bufToIp(message.data[0..6].*);
@@ -144,7 +154,7 @@ const SYNCING = struct {
     }
     fn writeKey(io: Io, key: [8]u8) !void {
         const cwd_dir = std.Io.Dir.cwd();
-        const cache = cwd_dir.openDir(io, "cache", .{}) catch try cwd_dir.createDirPathOpen(io, "cache", .{});
+        const cache = cwd_dir.openDir(io, app_path++"cache", .{}) catch try cwd_dir.createDirPathOpen(io, "cache", .{});
         const key_file = cache.openFile(io, "key.txt", .{ .mode = .write_only }) catch try cache.createFile(io, "key.txt", .{});
 
         var wBuffer: [128]u8 = undefined;
@@ -198,18 +208,20 @@ const SYNCING = struct {
         var writer = std.Io.Writer.fixed(&wbuffer);
 
         _ = try input.streamRemaining(&writer);
-        const result1 = std.mem.cut(u8, writer.buffered(), "192.168.");
-        const result2 = std.mem.cut(u8, result1.?.@"1", "\n");
+        const result1 = std.mem.cut(u8, writer.buffered(), "IPv4");
+        const result2 = std.mem.cut(u8, result1.?.@"1", ": ");
+        const result3 = std.mem.cut(u8, result2.?.@"1", "\n");
 
         var byte: u8 = 0;
         var x: usize = 0;
-        for (result2.?.@"0") |c| {
+        for (result3.?.@"0") |c| {
             switch (c) {
                 '0'...'9' => {
                     byte = byte * 10 + (c - '0');
                 },
                 else => {
-                    result[2 + x] = byte;
+                    result[x] = byte;
+                    byte = 0;
                     x += 1;
                 },
             }
@@ -237,7 +249,6 @@ const SYNCING = struct {
         var byte: u8 = 0;
         var x: usize = 0;
         for (result2.?.@"0") |c| {
-            std.debug.print("{c}\n", .{c});
             switch (c) {
                 '0'...'9' => {
                     byte = byte * 10 + (c - '0');
@@ -273,6 +284,108 @@ const SYNCING = struct {
         port <<= 8;
         port |= bytes[5];
         return .{ .ip4 = .{ .bytes = bytes[0..4].*, .port = port } };
+    }
+};
+// rename [path] [newname]
+// update [path] playcount [amount]
+// update [path] playtime [time in seconds]
+// add [path] - when a new song is downloaded or added to library / to make sure it is traacked / can be a folder
+// 
+
+const app_path = "app/";
+pub const EDITING = struct {
+    pub fn openHistoryFile(io: Io) !std.Io.File {
+        const change_dir_name = app_path ++ "changes";
+        const history_file_name = "history.txt";
+
+        const cwd = std.Io.Dir.cwd();
+
+        const change_dir = cwd.openDir(io, change_dir_name, .{})
+                                catch try cwd.createDirPathOpen(io, change_dir_name, .{});
+        defer change_dir.close(io);
+
+        return change_dir.openFile(io, history_file_name, .{ .mode = .read_write })
+                catch try change_dir.createFile(io, history_file_name, .{.read = true});
+    }
+    pub fn clearHistoryFile(io: Io) !void {
+        const file = try openHistoryFile(io);
+        defer file.close(io);
+
+        var wBuffer: [256]u8 = undefined;
+        var writer = file.writer(io, &wBuffer);
+
+        try writer.end();
+    }
+    fn openMusicDir(io: Io) !std.Io.Dir {
+        const music_dir_name = app_path ++ "music";
+        
+        const cwd = std.Io.Dir.cwd();
+
+        return cwd.openDir(io, music_dir_name, .{})
+                catch try cwd.createDirPathOpen(io, music_dir_name, .{});
+    }
+    pub fn appendLine(io: Io, line: []const u8) !void {
+        const file = try openHistoryFile(io);
+        defer file.close(io);
+
+        var wBuffer: [256]u8 = undefined;
+        var writer = file.writer(io, &wBuffer);
+        var out = &writer.interface;
+
+        try writer.seekTo(try file.length(io));
+        try out.writeAll(line);
+        try out.writeAll("\n");
+        try out.flush();
+    }
+    // TODO: make sure path is being tracked first before  
+    fn renameFile(io: Io, path: []const u8, new_name: []const u8) !void {
+        const music_dir = try openMusicDir(io);
+        defer music_dir.close(io);
+
+        if (music_dir.openFile(io, path, .{})) |_| {
+            var buffer: [128]u8 = undefined;
+            const old_path: []const u8 = std.fs.path.dirname(path) orelse "";
+            const dir = try music_dir.openDir(io, old_path, .{});
+            
+            const total_len = old_path.len + new_name.len;
+            if (total_len >= buffer.len) return error.RanOutofBufferSpace;
+            @memcpy(buffer[0..old_path.len], old_path);
+            @memcpy(buffer[old_path.len..total_len], new_name);
+            
+            music_dir.renamePreserve(path, dir, new_name, io) catch |err| switch (err) {
+                error.PathAlreadyExists => {
+                    std.debug.print("Other song with name \"{s}\" found\n", .{new_name});
+                    return err;
+                },
+                else => {
+                    std.debug.print("Error renaming song: {any}\n", .{err});
+                    return err;
+                },
+            };
+
+            var buffer1: [128]u8 = undefined;
+            var list = std.ArrayList(u8).initBuffer(&buffer1);
+            
+            try list.appendSliceBounded("rename ");
+            try list.appendSliceBounded(path);
+            try list.appendSliceBounded(" ");
+            try list.appendSliceBounded(new_name);
+
+            try appendLine(io, list.items);
+
+        } else |err| switch (err) {
+            std.Io.File.OpenError.FileNotFound => {
+                std.debug.print("Path doesnt exist: \"{s}\"\n", .{path});
+                return err;
+            },
+            else => {
+                std.debug.print("Error opening song: {any}\n", .{err});
+                return err;
+            },
+        }
+    }
+    fn add(_: Io, _: []const u8) !void {
+
     }
 };
 fn cin(io: std.Io, buffer: []u8) []u8 {

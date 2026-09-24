@@ -18,10 +18,11 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(alloc);
     defer alloc.free(args[0..]);
 
-    // const string: [*:0]const u8 = "sync 12345679";
-    // const i = api.clientAPI(string);
-    // std.debug.print("exit code {d}\n", .{i});
+    const string: [*:0]const u8 = "rename idk.mp3 imcool.mp3";
+    const i = api.clientAPI(string);
+    std.debug.print("exit code {d}\n", .{i});
 
-    try lib.handleArgs(init.io,args);
+    // try lib.handleArgs(init.io,args);
+    // try lib.EDITING.appendLine(init.io, "hello\n");
 }
 
