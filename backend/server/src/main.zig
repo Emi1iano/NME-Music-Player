@@ -3,6 +3,7 @@ const Io = std.Io;
 
 const MAX_CONNECTIONS: usize = 16;
 const Connection = struct {key: [8]u8 = undefined, ip: std.Io.net.IpAddress, local_ip: ?std.Io.net.IpAddress = null, timestamp: std.Io.Timestamp};
+//TODO: add a mutex to this
 var CLIENTS: [MAX_CONNECTIONS]?Connection = [_]?Connection{null} ** MAX_CONNECTIONS;
 var CLIENTS_SIZE: usize = 0;
 const CONNECTIONS = struct {
@@ -35,12 +36,15 @@ const CONNECTIONS = struct {
                 if (std.mem.eql(u8, &CLIENTS[x].?.key, &CLIENTS[y].?.key)) {
                     var client1: std.Io.net.IpAddress = undefined;
                     var client2: std.Io.net.IpAddress = undefined;
+                    // TODO: check port too
                     if (std.mem.eql(u8, &CLIENTS[x].?.ip.ip4.bytes, &CLIENTS[y].?.ip.ip4.bytes)) {
                         if (CLIENTS[x].?.local_ip == null or CLIENTS[y].?.local_ip == null) {
                             return error.NoLocalIp;
                         }
-                        client1 = CLIENTS[x].?.local_ip.?;
+                        //client1 = CLIENTS[x].?.local_ip.?;
                         client2 = CLIENTS[y].?.local_ip.?;
+                        client1 = CLIENTS[x].?.ip;
+                        // client2 = CLIENTS[y].?.ip;
                     } else {
                         client1 = CLIENTS[x].?.ip;
                         client2 = CLIENTS[y].?.ip;
@@ -48,7 +52,14 @@ const CONNECTIONS = struct {
                     //TODO: make this not needed
                     var buffer: [6]u8 = undefined;
 
-                    try server_spcket.send(io, &client1, formatIp(client2, &buffer));
+                    try print(io, "swamping {any} and {any}\n", .{client1, client2});
+
+                    //try server_spcket.send(io, &client1, formatIp(client2, &buffer));
+                    
+                    for (0..20) |_| {
+                        try server_spcket.send(io, &client1, "hello from server");
+                        try io.sleep(.fromMicroseconds(10), .awake);
+                    }
                     try server_spcket.send(io, &client2, formatIp(client1, &buffer));
 
                     CLIENTS[x] = null;
@@ -77,12 +88,15 @@ fn mainThread(init: std.process.Init) !void {
     var buffer: [1024]u8 = undefined;
     while (true) {
         const message = try server_socket.receive(init.io, &buffer);
+        // for (0..20) |_| {
+        //     try server_socket.send(init.io, &message.from, "HELLO");
+        // }
         
         if (message.data.len == 14) {
             const local_ip = bufToIp(message.data[0..6].*);
             const b = message.from.ip4.bytes;
             const key = message.data[6..14];
-            try print(init.io, "\x1b[1APublic: {d}.{d}.{d}.{d}:{d}, Local: {d}.{d}.{d}.{d}:{d} Connected with key: {s}\x1b[1E\n", 
+            try print(init.io, "Public: {d}.{d}.{d}.{d}:{d}, Local: {d}.{d}.{d}.{d}:{d} Connected with key: {s}\n", 
             .{b[0], b[1], b[2], b[3], message.from.getPort(), message.data[0], message.data[1], message.data[2], message.data[3], local_ip.getPort(), key});
 
             var conn = Connection {.ip = message.from, .timestamp = std.Io.Timestamp.now(init.io, .awake)};
@@ -105,15 +119,15 @@ fn mainThread(init: std.process.Init) !void {
 fn workerThread(init: std.process.Init) !void {
     std.debug.print("size: {d}\n", .{CLIENTS_SIZE});
     while (true) {
-        try print(init.io, "\x1b[1Asize: {d}\n", .{CLIENTS_SIZE});
+        try print(init.io, "size: {d}", .{CLIENTS_SIZE});
 
-        try init.io.sleep(.fromSeconds(1), .awake);
+        try init.io.sleep(.fromMilliseconds(100), .awake);
     }
 }
 var lock = std.Io.Mutex.init;
 fn print(io: Io, comptime fmt: []const u8, args: anytype) !void {
     try lock.lock(io);
-    std.debug.print(fmt, args);
+    std.debug.print("\x1b[1A" ++ fmt ++ "\x1b[1E", args);
     lock.unlock(io);
 }
 fn formatIp(ip: std.Io.net.IpAddress, buffer: []u8) []u8 {

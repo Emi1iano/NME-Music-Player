@@ -1,7 +1,12 @@
 const std = @import("std");
 const lib = @import("lib.zig");
 
-pub fn clientAPI(string: [*:0]const u8) i32 {
+// add [path] - path needs to be relative to the music folder and be a path to a file
+// rename [path]  - path needs to be relative to the music folder and be a path to a file
+// sync [key] - key is optional and 8bytes between chars '0'-'9' / if key isnt provided load cache for key else generate new key then attempt to connect
+// sync_new_key - generates new key without connecting
+
+export fn clientAPI(string: [*:0]const u8) callconv(.c) i32 {
     const buf: []const u8 = std.mem.span(string);
     var it = std.mem.tokenizeScalar(u8, buf, ' ');
 

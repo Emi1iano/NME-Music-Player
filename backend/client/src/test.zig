@@ -10,6 +10,8 @@ test "rename" {
     const io = std.testing.io;
     const alloc = std.testing.allocator;
 
+    lib.if_testing = true;
+
     try lib.EDITING.clearHistoryFile(io);
     
     try lib.handleArgs(io, &.{ "dummy", "rename", "b.mp3", "a.mp3" });
@@ -36,4 +38,56 @@ test "rename" {
     try lib.EDITING.clearHistoryFile(io);
 }
 test "update" {}
-test "add" {}
+test "add" {
+    const io = std.testing.io;
+    const alloc = std.testing.allocator;
+
+    lib.if_testing = true;
+
+    try lib.EDITING.test_reset(io);
+    
+    try lib.handleArgs(io, &.{ "dummy", "add", "music.opus"});
+    try lib.handleArgs(io, &.{ "dummy", "add", "music.opus"});
+    try lib.handleArgs(io, &.{ "dummy", "add", "music.opus"});
+    try lib.handleArgs(io, &.{ "dummy", "add", "music.opus"});
+    try lib.handleArgs(io, &.{ "dummy", "add", "music.opus"});
+    try lib.handleArgs(io, &.{ "dummy", "add", "music.opus"});
+    try lib.handleArgs(io, &.{ "dummy", "add", "music.opus"});
+    try lib.handleArgs(io, &.{ "dummy", "add", "music.opus"});
+    try lib.handleArgs(io, &.{ "dummy", "add", "music.opus"});
+    try lib.handleArgs(io, &.{ "dummy", "add", "music.opus"});
+
+    {
+        const file = try lib.EDITING.openHistoryFile(io);
+
+        var rBuf: [1024]u8 = undefined;
+        var reader = file.reader(io, &rBuf);
+        var in = &reader.interface;
+        const buf = try in.allocRemaining(alloc, .unlimited);
+        defer alloc.free(buf);
+
+        var it = std.mem.tokenizeScalar(u8, buf, '\n');
+        
+        try std.testing.expectEqualSlices(u8, "add id:1", it.next() orelse "");
+        try std.testing.expectEqualSlices(u8, "add id:2", it.next() orelse "");
+
+        file.close(io);
+    }
+    {
+        const file = try lib.EDITING.openTableFile(io);
+
+        var rBuf: [1024]u8 = undefined;
+        var reader = file.reader(io, &rBuf);
+        var in = &reader.interface;
+        const buf = try in.allocRemaining(alloc, .unlimited);
+        defer alloc.free(buf);
+
+        var it = std.mem.tokenizeScalar(u8, buf, '\n');
+        
+        try std.testing.expectEqual(10, lib.stringToNum(it.next() orelse ""));
+        try std.testing.expectEqualSlices(u8, "1 music.opus", it.next() orelse "");
+        try std.testing.expectEqualSlices(u8, "2 music.opus", it.next() orelse "");
+
+        file.close(io);
+    }
+}
