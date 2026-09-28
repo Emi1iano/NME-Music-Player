@@ -3,3 +3,7 @@ backend/server/.zig-cache
 backend/client/zig-out
 backend/server/zig-out
 backend/client/cache
+backend/NetworksButBetter/client/.zig-cache
+backend/NetworksButBetter/client/zig-out
+backend/NetworksButBetter/server/.zig-cache
+backend/NetworksButBetter/server/zig-out

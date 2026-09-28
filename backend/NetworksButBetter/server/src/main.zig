@@ -39,18 +39,16 @@ pub const Networks = struct {
         TCP = 0x2,
         TEXT = 0x3,
         P2P = 0x4,
+        NONE = 0x5,
 
-        pub fn getCode(byte: u8) !ClientCode {
+        pub fn getCode(byte: u8) ClientCode {
             switch (byte) {
                 0x0 => return ClientCode.INITIAL,
                 0x1 => return ClientCode.UDP,
                 0x2 => return ClientCode.TCP,
                 0x3 => return ClientCode.TEXT,
                 0x4 => return ClientCode.P2P,
-                else => {
-                    std.debug.print("Invalid Code: {b}", .{byte});
-                    return error.InvalidCode;
-                },
+                else => return ClientCode.NONE,
             }
         }
         pub fn getByte(comptime code: ClientCode) [1]u8 {
@@ -60,6 +58,7 @@ pub const Networks = struct {
                 .TCP => return .{0x02},
                 .TEXT => return .{0x03},
                 .P2P => return .{0x04},
+                else => unreachable,
             }
         }
     };

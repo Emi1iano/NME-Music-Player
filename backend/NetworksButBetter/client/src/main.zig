@@ -81,13 +81,12 @@ const Networks = struct {
         // for Peer to Peer connection
         const P2P = struct {
             fn start(io: Io) !void {
-                std.debug.print("public: {any}\n", .{clientState.reciever_public_ip.?});
                 var thread = try std.Thread.spawn(.{}, listen, .{ io });
                 try sending(io);
                 thread.join();
             }
             fn sending(io: Io) !void {
-                for (0..20) |_| {
+                for (0..30) |_| {
                     try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, "LOCAL IP");
                     try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, "PUBLIC IP");
                     try io.sleep(.fromMilliseconds(100), .awake);
@@ -98,32 +97,6 @@ const Networks = struct {
                 while (true) {
                     const message = try clientState.client_socket.receive(io, &buffer);
                     std.debug.print("recieved: {s}\n", .{message.data[1..]});
-                    //const code = try ClientCode.getCode(message.data[0]);
-                    // switch (code) {
-                    //     .INITIAL => {
-                    //         if (message.data.len == 13) {
-                    //             try clientState.parseInitialResponse(message.data[1..13].*);
-                    //             print(io, "Already initiated\n", .{});
-                    //         }
-                    //     },
-                    //     .TEXT => {
-                    //         std.debug.print("{s}\n", .{message.data[1..]});
-                    //     },
-                    //     .P2P => {
-                    //         //try clientState.lock.lock(io);
-                    //         if (std.mem.eql(u8, message.data[1..], "LOCAL IP")) {
-                    //             //try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, "\x03ACK LOCAL IP 1");
-                    //             //try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, "\x03ACK LOCAL IP 2");
-                    //         } else if (std.mem.eql(u8, message.data[1..], "PUBLIC IP")) {
-                    //             //try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, "\x03ACK PUBLIC IP 1");
-                    //             //try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, "\x03ACK PUBLIC IP 2");
-                    //         }
-                    //         //clientState.lock.unlock(io);
-                    //     },
-                    //     else => {
-                    //         std.debug.print("Code not handled: {b}\n", .{message.data[0]});
-                    //     }
-                    // }
                 }
             }
         };
@@ -154,7 +127,7 @@ const Networks = struct {
         fn initialResponse(io: Io) !void {
             var buffer: [1024]u8 = undefined;
             const message = try clientState.client_socket.receive(io, &buffer);
-            const code = try ClientCode.getCode(message.data[0]);
+            const code = ClientCode.getCode(message.data[0]);
             switch (code) {
                 .INITIAL => {
                     if (message.data.len == 13) {
