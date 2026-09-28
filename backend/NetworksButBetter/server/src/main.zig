@@ -53,6 +53,15 @@ pub const Networks = struct {
                 },
             }
         }
+        pub fn getByte(comptime code: ClientCode) [1]u8 {
+            switch (code) {
+                .INITIAL => return .{0x00},
+                .UDP => return .{0x01},
+                .TCP => return .{0x02},
+                .TEXT => return .{0x03},
+                .P2P => return .{0x04},
+            }
+        }
     };
     const ServerState = struct {
         clients: [16]?ClientConnection = [_]?ClientConnection{null} ** 16,
@@ -101,6 +110,7 @@ pub const Networks = struct {
             var response: [13]u8 = undefined;
             response[0] = @intFromEnum(ClientCode.INITIAL);
             @memcpy(response[1..13], &bothIpToBuf(other));
+            print(io, "sending {any} to {any}\n", .{other.public_ip, ip});
 
             try self.server_socket.send(io, &ip, &response);
         }
@@ -144,8 +154,7 @@ pub const Networks = struct {
                 };
                 const p = connection.public_ip.ip4;
                 const l = connection.local_ip.?.ip4;
-                print(io, "Public: {d}.{d}.{d}.{d}:{d}, Local: {d}.{d}.{d}.{d}:{d} Connected with key: {s} with code: {any}\n",
-                 .{ p.bytes[0], p.bytes[2], p.bytes[2], p.bytes[3], p.port, l.bytes[0], l.bytes[1], l.bytes[2], l.bytes[3], l.port, connection.key, connection.client_code});
+                print(io, "Public: {d}.{d}.{d}.{d}:{d}, Local: {d}.{d}.{d}.{d}:{d} Connected with key: {s} with code: {any}\n", .{ p.bytes[0], p.bytes[1], p.bytes[2], p.bytes[3], p.port, l.bytes[0], l.bytes[1], l.bytes[2], l.bytes[3], l.port, connection.key, connection.client_code });
 
                 try serverState.add(io, connection);
                 try serverState.pairUp(io);

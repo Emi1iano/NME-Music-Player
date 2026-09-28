@@ -31,6 +31,9 @@ const Networks = struct {
                 .key = FileManager.getKey(io) catch unreachable,
             };
         }
+        fn deinit(self: *ClientState, io: Io) void {
+            self.client_socket.close(io);
+        }
         fn send(self: *ClientState, io: Io, data: []u8) !void {
             //TODO: MAKE THIS BETTER
             const ip = if (self.reciever_public_ip == null) self.server_ip else self.reciever_public_ip.?;
@@ -78,17 +81,15 @@ const Networks = struct {
         // for Peer to Peer connection
         const P2P = struct {
             fn start(io: Io) !void {
-                const thread = try std.Thread.spawn(.{}, listen, .{ io });
+                std.debug.print("public: {any}\n", .{clientState.reciever_public_ip.?});
+                var thread = try std.Thread.spawn(.{}, listen, .{ io });
                 try sending(io);
                 thread.join();
             }
             fn sending(io: Io) !void {
                 for (0..20) |_| {
-                    try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, "\x04LOCAL IP");
-                    try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, "\x04PUBLIC IP");
-                }
-                while (true) {
-                    // if ()
+                    try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, "LOCAL IP");
+                    try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, "PUBLIC IP");
                     try io.sleep(.fromMilliseconds(100), .awake);
                 }
             }
@@ -96,30 +97,33 @@ const Networks = struct {
                 var buffer: [1024]u8 = undefined;
                 while (true) {
                     const message = try clientState.client_socket.receive(io, &buffer);
-                    const code = try ClientCode.getCode(message.data[0]);
-                    switch (code) {
-                        .INITIAL => {
-                            if (message.data.len == 13) {
-                                try clientState.parseInitialResponse(message.data[1..13].*);
-                                print(io, "Already initiated\n", .{});
-                            }
-                        },
-                        .TEXT => {
-                            std.debug.print("{s}\n", .{message.data[1..]});
-                        },
-                        .P2P => {
-                            try clientState.lock.lock(io);
-                            if (std.mem.eql(u8, message.data[1..], "LOCAL IP")) {
-                                try clientState.client_socket.send(io, &message.from, "\x03ACK LOCAL IP");
-                            } else if (std.mem.eql(u8, message.data[1..], "PUBLIC IP")) {
-                                try clientState.client_socket.send(io, &message.from, "\x03ACK PUBLIC IP");
-                            }
-                            clientState.lock.unlock(io);
-                        },
-                        else => {
-                            std.debug.print("Code not handled: {b}\n", .{message.data[0]});
-                        }
-                    }
+                    std.debug.print("recieved: {s}\n", .{message.data[1..]});
+                    //const code = try ClientCode.getCode(message.data[0]);
+                    // switch (code) {
+                    //     .INITIAL => {
+                    //         if (message.data.len == 13) {
+                    //             try clientState.parseInitialResponse(message.data[1..13].*);
+                    //             print(io, "Already initiated\n", .{});
+                    //         }
+                    //     },
+                    //     .TEXT => {
+                    //         std.debug.print("{s}\n", .{message.data[1..]});
+                    //     },
+                    //     .P2P => {
+                    //         //try clientState.lock.lock(io);
+                    //         if (std.mem.eql(u8, message.data[1..], "LOCAL IP")) {
+                    //             //try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, "\x03ACK LOCAL IP 1");
+                    //             //try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, "\x03ACK LOCAL IP 2");
+                    //         } else if (std.mem.eql(u8, message.data[1..], "PUBLIC IP")) {
+                    //             //try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, "\x03ACK PUBLIC IP 1");
+                    //             //try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, "\x03ACK PUBLIC IP 2");
+                    //         }
+                    //         //clientState.lock.unlock(io);
+                    //     },
+                    //     else => {
+                    //         std.debug.print("Code not handled: {b}\n", .{message.data[0]});
+                    //     }
+                    // }
                 }
             }
         };
@@ -268,6 +272,7 @@ const FileManager = struct {
 
 pub fn main(init: std.process.Init) !void {
     clientState = .init(init.io);
+    defer clientState.deinit(init.io);
     try Networks.Client.start(init.io); 
 }
 
