@@ -16,14 +16,12 @@ pub const Networks = struct {
         public_ip: std.Io.net.IpAddress = undefined,
         local_ip: ?std.Io.net.IpAddress = null,
         key: [8]u8 = undefined,
-        client_code: ClientCode = undefined,
 
-        pub fn init(buffer: [15]u8, public_ip: std.Io.net.IpAddress) !ClientConnection {
-            const code = ClientCode.getCode(buffer[0]);
-            const local_ip = getLocalIp(buffer[1..7]);
-            const key = buffer[7..15];
+        pub fn init(buffer: [14]u8, public_ip: std.Io.net.IpAddress) ClientConnection {
+            const local_ip = getLocalIp(buffer[0..6]);
+            const key = buffer[6..14];
 
-            return .{ .public_ip = public_ip, .local_ip = local_ip, .key = key.*, .client_code = code };
+            return .{ .public_ip = public_ip, .local_ip = local_ip, .key = key.* };
         }
         fn getLocalIp(bytes: []const u8) std.Io.net.IpAddress {
             var port: u16 = 0;
@@ -40,7 +38,8 @@ pub const Networks = struct {
         TEXT = 0x3,
         P2P = 0x4,
         ACK = 0x5,
-        NONE = 0x6,
+        RELAY = 0x6,
+        NONE = 0x7,
         
 
         pub fn getCode(byte: u8) ClientCode {
@@ -51,6 +50,7 @@ pub const Networks = struct {
                 0x3 => return ClientCode.TEXT,
                 0x4 => return ClientCode.P2P,
                 0x5 => return ClientCode.ACK,
+                0x6 => return ClientCode.RELAY,
                 else => return ClientCode.NONE,
             }
         }
@@ -62,6 +62,7 @@ pub const Networks = struct {
                 .TEXT => return .{0x03},
                 .P2P => return .{0x04},
                 .ACK => return .{0x05},
+                .RELAY => return .{0x06},
                 else => unreachable,
             }
         }
@@ -137,6 +138,66 @@ pub const Networks = struct {
     };
     // TODO: for TCP
     const ClientState = struct {};
+    const Temp = struct {
+        var relayClients: [16]?RelayClient = [_]?RelayClient{null} ** 16;
+
+        const RelayClient = struct {
+            from_ip: net.IpAddress,
+            key: [8]u8,
+
+            fn init(ip: net.IpAddress, key: [8]u8) RelayClient {
+                return .{
+                    .from_ip = ip,
+                    .key = key,
+                };
+            }
+        };
+        fn add(new: RelayClient) !void {
+            //check if exists
+            for (&relayClients) |*client| {
+                if (client.* != null) {
+                    //std.debug.print("already tracked relay client\n", .{});
+                    if (client.*.?.from_ip.eql(&new.from_ip)) return;
+                }
+            } 
+            for (&relayClients) |*client| {
+                if (client.* == null) {
+                    //std.debug.print("added new relay client\n", .{});
+                    client.* = new;
+                    return;
+                }
+            } else {
+                return error.TooManyClients;
+            }
+        }
+        fn remove(io: Io, ip: net.IpAddress) !void {
+            for (&relayClients) |*client| {
+                if (client.* != null) {
+                    if (client.*.?.from_ip.eql(&ip)) {
+                        const key = client.*.?.key;
+                        for (&relayClients) |*client1| {
+                            if (std.mem.eql(u8, &key, &client1.*.?.key)) {
+                                try serverState.server_socket.send(io, &client.*.?.from_ip, "EXIT");
+                                try serverState.server_socket.send(io, &client1.*.?.from_ip, "EXIT");
+                                client.* = null;
+                                client1.* = null;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fn resolve(io: Io, ip: net.IpAddress, key: [8]u8, data: []u8) !void {
+            for (&relayClients) |*client| {
+                if (client.* != null) {
+                    if (!client.*.?.from_ip.eql(&ip) and std.mem.eql(u8, &client.*.?.key, &key)) {
+                        std.debug.print("Sending data between relay clients\n", .{});
+                        try serverState.server_socket.send(io, &client.*.?.from_ip, data);
+                    }
+                }
+            }
+        }
+    };
     const Server = struct {
         fn listen(io: Io) !void {
             serverState.server_socket = try bindSocket(io);
@@ -144,29 +205,43 @@ pub const Networks = struct {
 
             var messageBuf: [1024]u8 = undefined;
             while (serverState.server_socket.receive(io, &messageBuf)) |message| {
-                if (message.data.len != 15) {
-                    print(io, "Invalid Client Message: {s}\n", .{message.data});
-                    continue;
-                }
-                const connection = Networks.ClientConnection.init(message.data[0..15].*, message.from) catch |err| switch (err) {
-                    error.InvalidCode => {
-                        print(io, "Invalid Client Code: {b}\n", .{message.data[0]});
-                        continue;
-                    },
-                    else => unreachable,
-                };
-                const p = connection.public_ip.ip4;
-                const l = connection.local_ip.?.ip4;
-                print(io, "Public: {d}.{d}.{d}.{d}:{d}, Local: {d}.{d}.{d}.{d}:{d} Connected with key: {s} with code: {any}\n", .{ p.bytes[0], p.bytes[1], p.bytes[2], p.bytes[3], p.port, l.bytes[0], l.bytes[1], l.bytes[2], l.bytes[3], l.port, connection.key, connection.client_code });
+                print(io, "Client Size {d}\n", .{serverState.clients_size});
+                const code = ClientCode.getCode(message.data[0]);
+                switch (code) {
+                    .INITIAL => {
+                        if (message.data.len != 15) {
+                            print(io, "Invalid Client Message: {s}\n", .{message.data});
+                            continue;
+                        }
+                        const connection = Networks.ClientConnection.init(message.data[1..15].*, message.from);
+                        const p = connection.public_ip.ip4;
+                        const l = connection.local_ip.?.ip4;
+                        print(io, "Public: {d}.{d}.{d}.{d}:{d}, Local: {d}.{d}.{d}.{d}:{d} Connected with key: {s}\n", .{ p.bytes[0], p.bytes[1], p.bytes[2], p.bytes[3], p.port, l.bytes[0], l.bytes[1], l.bytes[2], l.bytes[3], l.port, connection.key });
 
-                try serverState.add(io, connection);
-                try serverState.pairUp(io);
+                        try serverState.add(io, connection);
+                        try serverState.pairUp(io);
+                    },
+                    .RELAY => {
+                        if (message.data.len == 14) {
+                            if (std.mem.eql(u8, message.data[10..14], "EXIT")) {
+                                try Temp.remove(io, message.from);
+                                continue;
+                            }
+                        }
+                        
+                        try Temp.add(.init(message.from, message.data[1..9].*));
+                        try Temp.resolve(io, message.from, message.data[1..9].*, message.data[9..]);
+                    },
+                    else => {
+                        print(io, "Code not implemented\n", .{});
+                    }
+                }
             } else |_| {}
         }
         fn workerThread(io: Io) !void {
             std.debug.print("size: {d}\n", .{serverState.clients_size});
             while (true) {
-                print(io, "size: {d}", .{serverState.clients_size});
+                //print(io, "size: {d}", .{serverState.clients_size});
 
                 try io.sleep(.fromMilliseconds(100), .awake);
             }
@@ -188,7 +263,8 @@ pub fn main(init: std.process.Init) !void {
 var lock = std.Io.Mutex.init;
 fn print(io: Io, comptime fmt: []const u8, args: anytype) void {
     lock.lock(io) catch unreachable;
-    std.debug.print("\x1b[1A" ++ fmt ++ "\x1b[1E", args);
+    std.debug.print(fmt, args);
+    //std.debug.print("\x1b[1A" ++ fmt ++ "\x1b[1E", args);
     lock.unlock(io);
 }
 

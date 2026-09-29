@@ -13,16 +13,19 @@ const Io = std.Io;
 // attempt to connect to reciever ip
 // if fails fall back to relaying
 var clientState: Networks.ClientState = undefined;
+const TESTING_RELAY: bool = true;
 
 const Networks = struct {
     const ClientState = struct {
         client_socket: net.Socket = undefined,
         server_ip: net.IpAddress = undefined,
+        resolved_ip: net.IpAddress = undefined,
         reciever_public_ip: ?net.IpAddress = null,
         reciever_local_ip: ?net.IpAddress = null,
         key: [8]u8 = undefined,
         lock: std.Io.Mutex = .init,
         cliendMode: ClientMode = ClientMode.P2P,
+        recieved_inital_info: bool = false,
 
         const ClientMode = enum(u8) {
             P2P,
@@ -39,17 +42,19 @@ const Networks = struct {
         fn deinit(self: *ClientState, io: Io) void {
             self.client_socket.close(io);
         }
+        fn sendResolvedWithCode(self: *ClientState, io: Io, cliendCode: ClientCode, comptime message: []const u8) !void {
+            try self.client_socket.socket.send(io, &clientState.resolved_ip, ClientCode.getByte(cliendCode) ++ message);
+        }
+        fn sendResolved(self: *ClientState, io: Io, data: []u8) !void {
+            try self.client_socket.send(io, &clientState.resolved_ip, data);
+        }
         fn sendServer(self: *ClientState, io: Io, data: []u8) !void {
             try self.client_socket.send(io, &self.server_ip, data);
-        }
-        fn sendOtherClient(self: *ClientState, io: Io, data: []u8) !void {
-            if (self.reciever_local_ip != null and self.reciever_public_ip != null) unreachable;
-            const resolved = if (self.reciever_local_ip == null) self.reciever_public_ip.? else self.reciever_local_ip.?;
-            try self.client_socket.send(io, &resolved, data);
         }
         fn parseInitialResponse(self: *ClientState, buffer: [12]u8) !void {
             self.reciever_public_ip = parseRecieverIp(buffer[0..6]);
             self.reciever_local_ip = parseRecieverIp(buffer[6..12]);
+            self.recieved_inital_info = true;
         }
         fn getClientSocket(io: Io) !net.Socket {
             const client_port: u16 = 32145;
@@ -80,113 +85,11 @@ const Networks = struct {
             port |= bytes[5];
             return .{ .ip4 = .{ .bytes = bytes[0..4].*, .port = port } };
         }
-        fn getKey(self: ClientState, io: Io) !void {
-            self.key = FileManager.getKey(io) catch unreachable;
-        }
     };
     const Client = struct {
-        // for Peer to Peer connection
-        const P2P = struct {
-            var acknowledged: bool = false;
-            var timeout: bool = false;
+        var acknowledged: bool = false;
 
-            fn start(io: Io) !void {
-                try InitialConnection.start(io);
-                try EstablishedConnection.start(io);
-            }
-
-            const InitialConnection = struct {
-                fn start(io: Io) !void {
-                    var thread = try std.Thread.spawn(.{}, listen, .{io});
-                    try sending(io);
-                    thread.join();
-                }
-                fn sending(io: Io) !void {
-                    for (0..30) |_| {
-                        if (clientState.reciever_local_ip) |ip| {
-                            try clientState.client_socket.send(io, &ip, ClientCode.getByte(.P2P) ++ "LOCAL IP");
-                        }
-                        if (clientState.reciever_public_ip) |ip| {
-                            try clientState.client_socket.send(io, &ip, ClientCode.getByte(.P2P) ++ "LOCAL IP");
-                        }
-                        //try clientState.lock.lock(io);
-                        //try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.TEXT) ++ "SENDING");
-                        //clientState.lock.unlock(io);
-                        try io.sleep(.fromMilliseconds(100), .awake);
-                    }
-                    try io.sleep(.fromSeconds(5), .awake);
-                    if (timeout) {
-                        std.debug.print("Failed to establish P2P\n", .{});
-                        return;
-                    }
-                }
-                fn listen(io: Io) !void {
-                    //const time: std.Io.Timeout = .{ .duration = .{ .raw = .fromSeconds(5), .clock = .awake } };
-                    var buffer: [1024]u8 = undefined;
-                    while (true) {
-                        const message = try clientState.client_socket.receive(io, &buffer);
-                        // const message = clientState.client_socket.receiveTimeout(io, &buffer, time) catch |err| switch (err) {
-                        //     error.Timeout => {
-                        //         timeout = true;
-                        //         return;
-                        //     }, else => {
-                        //         std.debug.print("ERROR: {any}\n", .{err});
-                        //         return;
-                        //     },
-                        // };
-                        const code = ClientCode.getCode(message.data[0]);
-
-                        switch (code) {
-                            .TEXT => std.debug.print("recieved: {s}\n", .{message.data[1..]}),
-                            .P2P => {
-                                if (clientState.reciever_local_ip) |ip| {
-                                    try clientState.client_socket.send(io, &ip, ClientCode.getByte(.ACK) ++ "LOCAL IP");
-                                }
-                                if (clientState.reciever_public_ip) |ip| {
-                                    try clientState.client_socket.send(io, &ip, ClientCode.getByte(.ACK) ++ "LOCAL IP");
-                                }
-                            },
-                            .ACK => {
-                                if (acknowledged) continue;
-                                if (std.mem.eql(u8, message.data[1..], "LOCAL IP")) {
-                                    std.debug.print("USE LOCAL IP\n", .{});
-                                    clientState.reciever_public_ip = null;
-                                } else if (std.mem.eql(u8, message.data[1..], "PUBLIC IP")) {
-                                    std.debug.print("USE PUBLIC IP\n", .{});
-                                    clientState.reciever_local_ip = null;
-                                }
-                                acknowledged = true;
-                            },
-                            .NONE => {
-                                if (std.mem.eql(u8, message.data[0..], "EXIT")) return;
-                                std.debug.print("Code not handled: {b}: {s}\n", .{ message.data[0], message.data[1..] });
-                            },
-                            else => std.debug.print("Not implemented yet!!: {any}\n", .{code}),
-                        }
-                    }
-                }
-            };
-            const EstablishedConnection = struct {
-                fn start(io: Io) !void {
-                    _ = io;
-                }
-            };
-        };
-        // if P2P fails rely on server
-        const Relaying = struct {
-            fn start(io: Io) !void {
-                _ = io;
-                std.debug.print("Starting Relaying\n", .{});
-            }
-        };
-        fn start(io: Io) !void {
-            try initialServerMessage(io);
-            try initialServerResponse(io);
-
-            try P2P.start(io);
-            try Relaying.start(io);
-        }
-        fn initialServerMessage(io: Io) !void {
+        fn sendInitialServerMessage(io: Io) !void {
             var message: [15]u8 = undefined;
             // client code
             message[0] = @intFromEnum(ClientCode.INITIAL);
@@ -197,22 +100,102 @@ const Networks = struct {
 
             try clientState.sendServer(io, &message);
         }
-        fn initialServerResponse(io: Io) !void {
-            var buffer: [1024]u8 = undefined;
-            const message = try clientState.client_socket.receive(io, &buffer);
-            const code = ClientCode.getCode(message.data[0]);
+        fn punching(io: Io) !void {
+            while (!clientState.recieved_inital_info) try io.sleep(.fromMilliseconds(100), .awake);
+            var socket = clientState.client_socket;
+            for (0..30) |_| {
+                if (acknowledged) break;
+                if (TESTING_RELAY) {
+                    try io.sleep(.fromMilliseconds(100), .awake);
+                    continue;
+                }
+                if (clientState.reciever_local_ip) |ip| {
+                    try socket.send(io, &ip, ClientCode.getByte(.P2P) ++ "LOCAL IP");
+                }
+                if (clientState.reciever_public_ip) |ip| {
+                    try socket.send(io, &ip, ClientCode.getByte(.P2P) ++ "PUBLIC IP");
+                }
+                try io.sleep(.fromMilliseconds(100), .awake);
+            }
+            if (acknowledged) {
+                std.debug.print("Done Punching\n", .{});
+                return;
+            }
+            std.debug.print("Failed to P2P\n", .{});
+            clientState.cliendMode = .Relay;
+            clientState.resolved_ip = clientState.server_ip;
+        }
+        fn clientStart(io: Io) !void {
+            var buffer: [256]u8 = undefined;
             while (true) {
+                const in = cin(io, &buffer);
+                try send(io, in);
+            }
+        }
+        fn send(io: Io, buf: []u8) !void {
+            if (clientState.cliendMode == .P2P) {
+                var buffer: [256]u8 = undefined;
+                var w = std.Io.Writer.fixed(&buffer);
+                try w.writeAll(&ClientCode.getByte(.TEXT));
+                try w.writeAll(buf);
+                try clientState.sendResolved(io, w.buffered());
+            } else {
+                var buffer: [256]u8 = undefined;
+                var w = std.Io.Writer.fixed(&buffer);
+                try w.writeAll(&ClientCode.getByte(.RELAY));
+                try w.writeAll(&clientState.key);
+                try w.writeAll(&ClientCode.getByte(.TEXT));
+                try w.writeAll(buf);
+                try clientState.sendResolved(io, w.buffered());
+            }
+        }
+        fn start(io: Io) !void {
+            var GlobalListeningThread = try std.Thread.spawn(.{}, listen, .{io});
+
+            try sendInitialServerMessage(io);
+            try punching(io);
+            try clientStart(io);
+
+            GlobalListeningThread.join();
+        }
+        fn listen(io: Io) !void {
+            var buffer: [1024]u8 = undefined;
+            while (true) {
+                const message = try clientState.client_socket.receive(io, &buffer);
+                const code = ClientCode.getCode(message.data[0]);
+
                 switch (code) {
                     .INITIAL => {
+                        if (clientState.recieved_inital_info) {
+                            std.debug.print("Already initalized\n", .{});
+                            continue;
+                        }
                         if (message.data.len == 13) {
                             try clientState.parseInitialResponse(message.data[1..13].*);
                             std.debug.print("Initial message: Other Client Public IP: {any} Local IP: {any}\n", .{ clientState.reciever_public_ip.?, clientState.reciever_local_ip.? });
-                            break;
                         }
                     },
-                    else => {
-                        std.debug.print("Code not handled: {b} {s}\n", .{ message.data[0], message.data[1..] });
+                    .TEXT => std.debug.print("recieved: {s}\n", .{message.data[1..]}),
+                    .P2P => {
+                        try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, ClientCode.getByte(.ACK) ++ "LOCAL IP");
+                        try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.ACK) ++ "PUBLIC IP");
                     },
+                    .ACK => {
+                        if (acknowledged) continue;
+                        if (std.mem.eql(u8, message.data[1..], "LOCAL IP")) {
+                            std.debug.print("USE LOCAL IP\n", .{});
+                            clientState.resolved_ip = clientState.reciever_local_ip.?;
+                        } else if (std.mem.eql(u8, message.data[1..], "PUBLIC IP")) {
+                            std.debug.print("USE PUBLIC IP\n", .{});
+                            clientState.resolved_ip = clientState.reciever_public_ip.?;
+                        }
+                        acknowledged = true;
+                    },
+                    .NONE => {
+                        if (std.mem.eql(u8, message.data[0..], "EXIT")) return;
+                        std.debug.print("Code not handled: {b}: {s}\n", .{ message.data[0], message.data[1..] });
+                    },
+                    else => std.debug.print("Not implemented yet!!: {any}\n", .{code}),
                 }
             }
         }
@@ -335,4 +318,17 @@ fn print(io: Io, comptime fmt: []const u8, args: anytype) void {
     lock.lock(io) catch unreachable;
     std.debug.print("\x1b[1A" ++ fmt ++ "\x1b[1E", args);
     lock.unlock(io);
+}
+fn cin(io: std.Io, buffer: []u8) []u8 {
+    var rBuffer: [256]u8 = undefined;
+    var stdin = std.Io.File.stdin().reader(io, &rBuffer);
+    var input = &stdin.interface;
+
+    var writer = std.Io.Writer.fixed(buffer);
+
+    const len = input.streamDelimiter(&writer, '\n') catch 1;
+
+    if (builtin.os.tag == .windows) {
+        return buffer[0 .. len - 1];
+    } else return buffer[0..len];
 }
