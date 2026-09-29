@@ -181,6 +181,7 @@ pub const Networks = struct {
                                 try serverState.server_socket.send(io, &client1.*.?.from_ip, "EXIT");
                                 client.* = null;
                                 client1.* = null;
+                                return;
                             }
                         }
                     }

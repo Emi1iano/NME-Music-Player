@@ -130,6 +130,7 @@ const Networks = struct {
             while (true) {
                 const in = cin(io, &buffer);
                 try send(io, in);
+                if (std.mem.eql(u8, in, "EXIT")) return;
             }
         }
         fn send(io: Io, buf: []u8) !void {
