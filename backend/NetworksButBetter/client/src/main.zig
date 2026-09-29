@@ -13,7 +13,7 @@ const Io = std.Io;
 // attempt to connect to reciever ip
 // if fails fall back to relaying
 var clientState: Networks.ClientState = undefined;
-const TESTING_RELAY: bool = true;
+const TESTING_RELAY: bool = false;
 
 const Networks = struct {
     const ClientState = struct {
@@ -124,6 +124,9 @@ const Networks = struct {
             std.debug.print("Failed to P2P\n", .{});
             clientState.cliendMode = .Relay;
             clientState.resolved_ip = clientState.server_ip;
+            var initial: [7]u8 = undefined;
+            @memcpy(initial[0..], "RESOLVE");
+            try send(io, initial[0..]);
         }
         fn clientStart(io: Io) !void {
             var buffer: [256]u8 = undefined;
@@ -131,10 +134,15 @@ const Networks = struct {
                 const in = cin(io, &buffer);
                 try send(io, in);
                 if (std.mem.eql(u8, in, "EXIT")) return;
+                
             }
         }
         fn send(io: Io, buf: []u8) !void {
             if (clientState.cliendMode == .P2P) {
+                if (std.mem.eql(u8, buf, "EXIT")) {
+                    try clientState.sendResolved(io, buf);
+                    return;
+                }
                 var buffer: [256]u8 = undefined;
                 var w = std.Io.Writer.fixed(&buffer);
                 try w.writeAll(&ClientCode.getByte(.TEXT));

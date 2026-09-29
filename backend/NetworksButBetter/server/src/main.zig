@@ -140,6 +140,7 @@ pub const Networks = struct {
     const ClientState = struct {};
     const Temp = struct {
         var relayClients: [16]?RelayClient = [_]?RelayClient{null} ** 16;
+        var size: usize = 0;
 
         const RelayClient = struct {
             from_ip: net.IpAddress,
@@ -164,6 +165,7 @@ pub const Networks = struct {
                 if (client.* == null) {
                     //std.debug.print("added new relay client\n", .{});
                     client.* = new;
+                    size += 1;
                     return;
                 }
             } else {
@@ -181,6 +183,7 @@ pub const Networks = struct {
                                 try serverState.server_socket.send(io, &client1.*.?.from_ip, "EXIT");
                                 client.* = null;
                                 client1.* = null;
+                                size -= 2;
                                 return;
                             }
                         }
@@ -226,11 +229,13 @@ pub const Networks = struct {
                         if (message.data.len == 14) {
                             if (std.mem.eql(u8, message.data[10..14], "EXIT")) {
                                 try Temp.remove(io, message.from);
+                                print(io, "Relay Size {d}\n", .{Temp.size});
                                 continue;
                             }
                         }
                         
                         try Temp.add(.init(message.from, message.data[1..9].*));
+                        print(io, "Relay Size {d}\n", .{Temp.size});
                         try Temp.resolve(io, message.from, message.data[1..9].*, message.data[9..]);
                     },
                     else => {
