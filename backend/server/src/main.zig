@@ -41,9 +41,9 @@ const CONNECTIONS = struct {
                         if (CLIENTS[x].?.local_ip == null or CLIENTS[y].?.local_ip == null) {
                             return error.NoLocalIp;
                         }
-                        //client1 = CLIENTS[x].?.local_ip.?;
+                        client1 = CLIENTS[x].?.local_ip.?;
                         client2 = CLIENTS[y].?.local_ip.?;
-                        client1 = CLIENTS[x].?.ip;
+                        //client1 = CLIENTS[x].?.ip;
                         // client2 = CLIENTS[y].?.ip;
                     } else {
                         client1 = CLIENTS[x].?.ip;
@@ -54,12 +54,12 @@ const CONNECTIONS = struct {
 
                     try print(io, "swamping {any} and {any}\n", .{client1, client2});
 
-                    //try server_spcket.send(io, &client1, formatIp(client2, &buffer));
+                    try server_spcket.send(io, &client1, formatIp(client2, &buffer));
                     
-                    for (0..20) |_| {
-                        try server_spcket.send(io, &client1, "hello from server");
-                        try io.sleep(.fromMicroseconds(10), .awake);
-                    }
+                    // for (0..20) |_| {
+                    //     try server_spcket.send(io, &client1, "hello from server");
+                    //     try io.sleep(.fromMicroseconds(10), .awake);
+                    // }
                     try server_spcket.send(io, &client2, formatIp(client1, &buffer));
 
                     CLIENTS[x] = null;

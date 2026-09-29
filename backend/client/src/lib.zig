@@ -88,7 +88,8 @@ const SYNCING = struct {
         std.debug.print("Using {any} to connect to {any}\n", .{client_socket.address, other_client});
         var cinbuf: [128]u8 = undefined;
         while (true) {
-            try client_socket.send(io, &other_client, cin(io, &cinbuf));
+            const in = cin(io, &cinbuf);
+            try client_socket.send(io, &other_client, in);
         }
         try client_socket.send(io, &other_client, "STOP");
 
@@ -114,6 +115,7 @@ const SYNCING = struct {
         var buffer: [1024]u8 = undefined;
         while (true) {
             const message = try socket.receive(io, &buffer);
+            std.debug.print("{s}\n", .{message.data});
             if (std.mem.eql(u8, message.data, "STOP")) break;
         }
 

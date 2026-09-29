@@ -87,8 +87,8 @@ const Networks = struct {
             }
             fn sending(io: Io) !void {
                 for (0..30) |_| {
-                    try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, "LOCAL IP");
-                    try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, "PUBLIC IP");
+                    try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, ClientCode.getByte(.P2P) ++ "LOCAL IP");
+                    try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.P2P) ++ "PUBLIC IP");
                     try io.sleep(.fromMilliseconds(100), .awake);
                 }
             }
@@ -96,7 +96,30 @@ const Networks = struct {
                 var buffer: [1024]u8 = undefined;
                 while (true) {
                     const message = try clientState.client_socket.receive(io, &buffer);
-                    std.debug.print("recieved: {s}\n", .{message.data[1..]});
+                    const code = ClientCode.getCode(message.data[0]);
+                    
+                    switch (code) {
+                        .TEXT => {
+                            std.debug.print("recieved: {s}\n", .{message.data[1..]});
+                        },
+                        .P2P => {
+                            try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, ClientCode.getByte(.ACK) ++ "LOCAL IP");
+                            try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.ACK) ++ "PUBLIC IP");
+                        },
+                        .ACK => {
+                            if (std.mem.eql(u8, message.data[1..], "LOCAL IP")) {
+                                std.debug.print("USE LOCAL IP\n", .{});
+                            } else if (std.mem.eql(u8, message.data[1..], "PUBLIC IP")) {
+                                std.debug.print("USE PUBLIC IP\n", .{});
+                            }
+                        },
+                        .NONE => {
+                            std.debug.print("Code not handled: {b}: {s}\n", .{message.data[0], message.data[1..]});
+                        },
+                        else => {
+                            std.debug.print("Not implemented yet!!: {any}\n", .{code});
+                        }
+                    }
                 }
             }
         };
@@ -109,6 +132,8 @@ const Networks = struct {
         fn start(io: Io) !void {
             try initialMessage(io);
             try initialResponse(io);
+
+            
 
             try P2P.start(io);
             try Relaying.start(io);
@@ -128,15 +153,18 @@ const Networks = struct {
             var buffer: [1024]u8 = undefined;
             const message = try clientState.client_socket.receive(io, &buffer);
             const code = ClientCode.getCode(message.data[0]);
-            switch (code) {
-                .INITIAL => {
-                    if (message.data.len == 13) {
-                        try clientState.parseInitialResponse(message.data[1..13].*);
-                        std.debug.print("Initial message: Other Client Public IP: {any} Local IP: {any}\n", .{clientState.reciever_public_ip.?, clientState.reciever_local_ip.?});
+            while (true) {
+                switch (code) {
+                    .INITIAL => {
+                        if (message.data.len == 13) {
+                            try clientState.parseInitialResponse(message.data[1..13].*);
+                            std.debug.print("Initial message: Other Client Public IP: {any} Local IP: {any}\n", .{clientState.reciever_public_ip.?, clientState.reciever_local_ip.?});
+                            break;
+                        }
+                    },
+                    else => {
+                        std.debug.print("Code not handled: {b} {s}\n", .{message.data[0], message.data[1..]});
                     }
-                },
-                else => {
-                    std.debug.print("Code not handled: {b} {s}\n", .{message.data[0], message.data[1..]});
                 }
             }
         }

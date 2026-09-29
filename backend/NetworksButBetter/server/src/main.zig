@@ -19,7 +19,7 @@ pub const Networks = struct {
         client_code: ClientCode = undefined,
 
         pub fn init(buffer: [15]u8, public_ip: std.Io.net.IpAddress) !ClientConnection {
-            const code = try ClientCode.getCode(buffer[0]);
+            const code = ClientCode.getCode(buffer[0]);
             const local_ip = getLocalIp(buffer[1..7]);
             const key = buffer[7..15];
 
@@ -39,7 +39,9 @@ pub const Networks = struct {
         TCP = 0x2,
         TEXT = 0x3,
         P2P = 0x4,
-        NONE = 0x5,
+        ACK = 0x5,
+        NONE = 0x6,
+        
 
         pub fn getCode(byte: u8) ClientCode {
             switch (byte) {
@@ -48,6 +50,7 @@ pub const Networks = struct {
                 0x2 => return ClientCode.TCP,
                 0x3 => return ClientCode.TEXT,
                 0x4 => return ClientCode.P2P,
+                0x5 => return ClientCode.ACK,
                 else => return ClientCode.NONE,
             }
         }
@@ -58,6 +61,7 @@ pub const Networks = struct {
                 .TCP => return .{0x02},
                 .TEXT => return .{0x03},
                 .P2P => return .{0x04},
+                .ACK => return .{0x05},
                 else => unreachable,
             }
         }
