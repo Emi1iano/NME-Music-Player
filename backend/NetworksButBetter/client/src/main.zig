@@ -78,11 +78,15 @@ const Networks = struct {
         fn getServerIp() !net.IpAddress {
             return try std.Io.net.IpAddress.parse("24.243.26.72", 5252);
         }
-        fn parseRecieverIp(bytes: []const u8) net.IpAddress {
+        fn parseRecieverIp(bytes: []const u8) ?net.IpAddress {
             var port: u16 = 0;
             port |= bytes[4];
             port <<= 8;
             port |= bytes[5];
+            const v: u32 = @bitCast(bytes[0..4].*);
+            if (v == 0) {
+                return null;
+            }
             return .{ .ip4 = .{ .bytes = bytes[0..4].*, .port = port } };
         }
     };
