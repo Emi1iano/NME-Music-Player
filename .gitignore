@@ -9,4 +9,6 @@ frontend/windows/windows/flutter/ephemeral/
 frontend/windows/.flutter-plugins
 frontend/windows/.flutter-plugins-dependencies
 frontend/windows/*.iml
-frontend/windows/.idea/
+frontend/windows/.idea/**/windows/flutter/generated_plugin_registrant.*
+**/windows/flutter/generated_plugins.cmake
+**/windows/flutter/ephemeral/
