@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../services/app_log.dart';
+import '../services/backend.dart';
 import '../services/library.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
@@ -14,10 +15,10 @@ import 'stats_screen.dart';
 /// Instructions for adding songs, different on iPhone vs Android.
 String howToAddMusic() {
   if (Platform.isIOS) {
-    return 'Open the Files app → On My iPhone → NME Music → Music, and put your '
+    return 'Open the Files app → On My iPhone → NME Music → app → music, and put your '
         'songs there. You can also drag files in from a computer with Finder or iTunes.';
   }
-  // Show the folder the way it looks from a PC, e.g. Android/data/<id>/files/Music
+  // Show the folder the way it looks from a PC, e.g. Android/data/<id>/files/app/music
   final path = Library.instance.musicDir.path;
   final i = path.indexOf('Android/data');
   return 'Connect your phone to a computer over USB and copy songs into\n'
@@ -74,6 +75,8 @@ class SettingsScreen extends StatelessWidget {
               ),
               onTap: library.scanning ? null : library.scan,
             ),
+            const _Header('Sync'),
+            const _SyncSection(),
             const _Header('Listening'),
             ListTile(
               leading: const Icon(Icons.bar_chart_rounded),
@@ -125,6 +128,106 @@ class SettingsScreen extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Settings → Sync: this device's key and the backend's status.
+/// Pairing with another device ("sync") comes once the backend supports
+/// being called from an app; for now: key, key regeneration, tracked songs.
+class _SyncSection extends StatelessWidget {
+  const _SyncSection();
+
+  Future<void> _newKey(BuildContext context) async {
+    final backend = Backend.instance;
+    final messenger = ScaffoldMessenger.of(context);
+    // Changing the key is like changing a password: warn first.
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Generate a new key?'),
+        content: const Text(
+            'Other devices will need the new key to sync with this phone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Generate')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final before = backend.key;
+    final key = await backend.generateNewKey();
+    messenger.showSnackBar(SnackBar(
+      content: Text(key != null && key != before
+          ? 'New key: $key'
+          : 'Could not make a new key. See Debug log'),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final backend = Backend.instance;
+    return ListenableBuilder(
+      listenable: backend,
+      builder: (context, _) {
+        if (!backend.available) {
+          return ListTile(
+            leading: const Icon(Icons.sync_disabled_rounded),
+            title: const Text('Sync not available'),
+            subtitle: Text(backend.unavailableReason ?? 'Backend not loaded',
+                style: const TextStyle(color: AppColors.textSecondary)),
+          );
+        }
+        final key = backend.key;
+        return Column(children: [
+          ListTile(
+            leading: const Icon(Icons.key_rounded),
+            title: const Text('Your sync key'),
+            // Shown as "1234 5678" so it's easy to read out to someone.
+            subtitle: Text(
+              key == null ? 'No key yet' : '${key.substring(0, 4)} ${key.substring(4)}',
+              style: const TextStyle(
+                  fontFamily: 'monospace', fontSize: 20, letterSpacing: 2,
+                  color: AppColors.textPrimary),
+            ),
+            trailing: key == null
+                ? null
+                : IconButton(
+                    tooltip: 'Copy key',
+                    icon: const Icon(Icons.copy_rounded, size: 20),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: key));
+                      ScaffoldMessenger.of(context)
+                          .showSnackBar(const SnackBar(content: Text('Key copied')));
+                    },
+                  ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.autorenew_rounded),
+            title: const Text('Generate new key'),
+            subtitle: const Text('Like changing a password',
+                style: TextStyle(color: AppColors.textSecondary)),
+            onTap: () => _newKey(context),
+          ),
+          ListTile(
+            leading: const Icon(Icons.library_add_check_rounded),
+            title: const Text('Songs tracked for syncing'),
+            subtitle: Text(
+              '${backend.tracked.length} of ${Library.instance.tracks.length} songs. '
+              'Tap to register new ones',
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
+            onTap: () => backend.registerNew(Library.instance.tracks.map((t) => t.id)),
+          ),
+          const ListTile(
+            leading: Icon(Icons.devices_rounded),
+            title: Text('Sync with another device'),
+            subtitle: Text('Coming soon (waiting on the backend)',
+                style: TextStyle(color: AppColors.textSecondary)),
+            enabled: false,
+          ),
+        ]);
+      },
     );
   }
 }

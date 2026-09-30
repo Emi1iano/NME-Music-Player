@@ -121,6 +121,9 @@ class AppLog extends ChangeNotifier {
     _saveTimer ??= Timer(const Duration(seconds: 5), _save);
   }
 
+  /// Save to disk now (used before risky calls like native backend code).
+  Future<void> flush() => _save();
+
   Future<void> _save() async {
     _saveTimer?.cancel();
     _saveTimer = null;

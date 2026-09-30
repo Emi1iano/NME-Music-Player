@@ -150,6 +150,14 @@ class _TitleRow extends StatelessWidget {
             },
           ),
           ListTile(
+            leading: const Icon(Icons.drive_file_rename_outline_rounded),
+            title: const Text('Rename file'),
+            onTap: () {
+              Navigator.pop(sheetContext);
+              renameSongFile(context, track);
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.info_outline_rounded),
             title: const Text('Song info'),
             onTap: () {

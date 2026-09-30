@@ -2,8 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../models/playlist.dart';
 import '../models/track.dart';
+import 'package:path/path.dart' as p;
+
+import '../services/backend.dart';
 import '../services/importer.dart';
+import '../services/library.dart';
 import '../services/playlists.dart';
+import '../services/stats.dart';
 import '../theme.dart';
 
 // Small building blocks shared by several screens, so they look and behave
@@ -220,6 +225,74 @@ Future<void> importSongs(BuildContext context) async {
     if (result.failed > 0) '${result.failed} failed (see Debug log)',
   ];
   messenger.showSnackBar(SnackBar(content: Text(parts.join(' • '))));
+}
+
+/// "Rename file" (Now Playing ⋯ menu): renames the song's file through the
+/// backend's `rename` command, then moves its stats/playlist entries to the
+/// new name and rescans.
+Future<void> renameSongFile(BuildContext context, Track track) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final backend = Backend.instance;
+  if (!backend.available) {
+    messenger.showSnackBar(SnackBar(
+        content: Text(backend.unavailableReason ?? 'Backend not available')));
+    return;
+  }
+  // The backend splits commands on spaces, so these files can't be renamed yet.
+  if (track.id.contains(' ')) {
+    messenger.showSnackBar(const SnackBar(
+        content: Text("Can't rename files with spaces in the name yet (backend limitation)")));
+    return;
+  }
+
+  final oldName = p.posix.basename(track.id);
+  final ext = p.extension(oldName);
+  final controller = TextEditingController(text: oldName);
+  final newName = await showDialog<String>(
+    context: context,
+    builder: (c) => AlertDialog(
+      title: const Text('Rename file'),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            helperText: 'No spaces (use - or _). Stays in the same folder.',
+          ),
+          onSubmitted: (v) => Navigator.pop(c, v.trim()),
+        ),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
+        FilledButton(
+            onPressed: () => Navigator.pop(c, controller.text.trim()),
+            child: const Text('Rename')),
+      ],
+    ),
+  );
+  if (newName == null || newName.isEmpty || newName == oldName) return;
+
+  // Keep the song's extension, or the library would stop seeing it as music.
+  final finalName =
+      p.extension(newName).toLowerCase() == ext.toLowerCase() ? newName : '$newName$ext';
+  if (finalName.contains(' ') || finalName.contains('/')) {
+    messenger.showSnackBar(
+        const SnackBar(content: Text('Use a name without spaces or slashes')));
+    return;
+  }
+
+  final ok = await backend.rename(track.id, finalName);
+  if (!ok) {
+    messenger.showSnackBar(
+        const SnackBar(content: Text('Rename failed. See Settings → Debug log')));
+    return;
+  }
+  final folder = p.posix.dirname(track.id);
+  final newId = folder == '.' ? finalName : '$folder/$finalName';
+  Stats.instance.renameTrack(track.id, newId);
+  await Playlists.instance.renameTrack(track.id, newId);
+  await Library.instance.scan();
+  messenger.showSnackBar(SnackBar(content: Text('Renamed to $finalName')));
 }
 
 // ---- Text formatting helpers (covered by tests in test/widget_test.dart) ----

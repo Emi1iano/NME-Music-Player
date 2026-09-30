@@ -5,6 +5,7 @@ import 'package:just_audio_background/just_audio_background.dart';
 
 import 'screens/home_shell.dart';
 import 'services/app_log.dart';
+import 'services/backend.dart';
 import 'services/library.dart';
 import 'services/player.dart';
 import 'services/playlists.dart';
@@ -43,6 +44,9 @@ Future<void> main() async {
   await Player.instance.init();
   await Playlists.instance.init();
   await Library.instance.init();
+  // Load Emiliano's backend library (libbackend.so) and point it at our data
+  // folder. Must run after Library.init, which decides where that folder is.
+  await Backend.instance.init(Library.instance.baseDir);
   // Don't block startup on the folder scan; the list fills in when it's done.
   Library.instance.scan();
 

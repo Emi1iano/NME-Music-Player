@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -13,6 +14,7 @@ import '../models/album.dart';
 import '../models/artist.dart';
 import '../models/track.dart';
 import 'app_log.dart';
+import 'backend.dart';
 import 'stats.dart';
 
 // The ways the Songs tab can be ordered (chosen with the ⇅ button).
@@ -45,7 +47,8 @@ class Library extends ChangeNotifier {
   Library._();
   static final Library instance = Library._();
 
-  late Directory musicDir;   // Where the user puts their songs
+  late String baseDir;       // The app's data folder (holds app/ for the backend)
+  late Directory musicDir;   // Where the user puts their songs: <baseDir>/app/music
   late Directory _artDir;    // Where we cache cover images pulled out of the files
 
   // The data the screens show.
@@ -96,15 +99,19 @@ class Library extends ChangeNotifier {
   /// Runs once at startup: finds/creates the Music folder and loads the
   /// saved sort choice.
   Future<void> init() async {
-    // Android: /storage/emulated/0/Android/data/<app id>/files/Music
+    // Android: /storage/emulated/0/Android/data/<app id>/files/app/music
     //   (reachable from a PC over USB).
-    // iOS: <app>/Documents/Music (visible in the Files app).
+    // iOS: <app>/Documents/app/music (visible in the Files app).
+    // The "app/music" layout is what Emiliano's backend expects (it keeps its
+    // state files next to it in app/state and app/cache).
     final base = Platform.isAndroid
         ? (await getExternalStorageDirectory() ??
             await getApplicationDocumentsDirectory())
         : await getApplicationDocumentsDirectory();
-    musicDir = Directory(p.join(base.path, 'Music'));
+    baseDir = base.path;
+    musicDir = Directory(p.join(baseDir, 'app', 'music'));
     await musicDir.create(recursive: true);
+    await _moveOldMusicFolder();
     await _checkWritable();
 
     _artDir = Directory(p.join((await getApplicationCacheDirectory()).path, 'art'));
@@ -114,6 +121,26 @@ class Library extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getInt('sortMode') ?? 0;
     _sortMode = SortMode.values[saved.clamp(0, SortMode.values.length - 1)];
+  }
+
+  /// Version 1.1 kept songs in `baseDir/Music`. Move them into app/music so
+  /// nobody's library disappears after updating.
+  Future<void> _moveOldMusicFolder() async {
+    final old = Directory(p.join(baseDir, 'Music'));
+    if (!await old.exists()) return;
+    var moved = 0;
+    try {
+      await for (final entity in old.list()) {
+        final target = p.join(musicDir.path, p.basename(entity.path));
+        if (await FileSystemEntity.type(target) != FileSystemEntityType.notFound) continue;
+        await entity.rename(target);
+        moved++;
+      }
+      if (await old.list().isEmpty) await old.delete();
+      AppLog.instance.info('Moved $moved item(s) from the old Music folder to app/music');
+    } catch (e, st) {
+      AppLog.instance.error('Could not move the old Music folder', e, st);
+    }
   }
 
   /// Makes sure the app can save files into its Music folder (needed for
@@ -155,6 +182,9 @@ class Library extends ChangeNotifier {
       for (final problem in result.problems) {
         AppLog.instance.warning(problem);
       }
+      // Tell the backend about songs it isn't tracking yet (runs in the
+      // background; the list on screen doesn't wait for it).
+      unawaited(Backend.instance.registerNew(_tracks.map((t) => t.id)));
     } catch (e, st) {
       AppLog.instance.error('Scanning the Music folder failed', e, st);
     } finally {

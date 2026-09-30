@@ -75,6 +75,21 @@ class Playlists extends ChangeNotifier {
         current.copyWith(trackIds: current.trackIds.where((id) => id != trackId).toList()));
   }
 
+  /// A song file was renamed, so its id (path) changed: update every
+  /// playlist that contains it.
+  Future<void> renameTrack(String oldId, String newId) async {
+    var changed = false;
+    for (var i = 0; i < _items.length; i++) {
+      if (_items[i].trackIds.contains(oldId)) {
+        _items[i] = _items[i].copyWith(
+          trackIds: [for (final id in _items[i].trackIds) id == oldId ? newId : id],
+        );
+        changed = true;
+      }
+    }
+    if (changed) await _save();
+  }
+
   /// Drag-to-reorder: take the track out at [from] and put it back at [to].
   Future<void> moveTrack(Playlist playlist, int from, int to) {
     final current = byId(playlist.id) ?? playlist;

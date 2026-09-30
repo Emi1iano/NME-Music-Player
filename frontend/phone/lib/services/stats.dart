@@ -79,6 +79,19 @@ class Stats extends ChangeNotifier {
     _changed();
   }
 
+  /// A song file was renamed, so its id (path) changed: keep its stats.
+  void renameTrack(String oldId, String newId) {
+    final s = _byTrack.remove(oldId);
+    if (s == null) return;
+    _byTrack[newId] = PlaybackStats(
+      trackId: newId,
+      playCount: s.playCount,
+      playtimeSeconds: s.playtimeSeconds,
+      lastPlayed: s.lastPlayed,
+    );
+    _changed();
+  }
+
   /// Clears everything (the reset button on the Listening Stats screen).
   Future<void> reset() async {
     _byTrack.clear();
