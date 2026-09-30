@@ -173,23 +173,49 @@ pub const Networks = struct {
             }
         }
         fn remove(io: Io, ip: net.IpAddress) !void {
+            // TODO: change  this to a single for loop
+            // TODO: if only one connects and you try to remove size underflows
+            // for (&relayClients) |*client| {
+            //     if (client.* != null) {
+            //         if (client.*.?.from_ip.eql(&ip)) {
+            //             const key = client.*.?.key;
+            //             for (&relayClients) |*client1| {
+            //                 if (std.mem.eql(u8, &key, &client1.*.?.key)) {
+            //                     try serverState.server_socket.send(io, &client.*.?.from_ip, "EXIT");
+            //                     try serverState.server_socket.send(io, &client1.*.?.from_ip, "EXIT");
+            //                     client.* = null;
+            //                     client1.* = null;
+            //                     size -= 2;
+            //                     return;
+            //                 }
+            //             }
+            //         }
+            //     }
+            // }
+            var from_client: RelayClient = undefined;
             for (&relayClients) |*client| {
                 if (client.* != null) {
                     if (client.*.?.from_ip.eql(&ip)) {
-                        const key = client.*.?.key;
-                        for (&relayClients) |*client1| {
-                            if (std.mem.eql(u8, &key, &client1.*.?.key)) {
-                                try serverState.server_socket.send(io, &client.*.?.from_ip, "EXIT");
-                                try serverState.server_socket.send(io, &client1.*.?.from_ip, "EXIT");
-                                client.* = null;
-                                client1.* = null;
-                                size -= 2;
-                                return;
-                            }
-                        }
+                        from_client = client.*.?;
+                        try serverState.server_socket.send(io, &from_client.from_ip, "EXIT");
+                        client.* = null;
+                        size -= 1;
+                        break;
                     }
                 }
             }
+            for (&relayClients) |*client| {
+                if (client.* != null) {
+                    if (from_client.from_ip.eql(&client.*.?.from_ip)) continue;
+                    if (std.mem.eql(u8, &from_client.key, &client.*.?.key)) {
+                        try serverState.server_socket.send(io, &client.*.?.from_ip, "EXIT");
+                        client.* = null;
+                        size -= 1;
+                        break;
+                    }
+                }
+            }
+
         }
         fn resolve(io: Io, ip: net.IpAddress, key: [8]u8, data: []u8) !void {
             for (&relayClients) |*client| {
@@ -224,6 +250,7 @@ pub const Networks = struct {
 
                         try serverState.add(io, connection);
                         try serverState.pairUp(io);
+                        print(io, "Client Size {d}\n", .{serverState.clients_size});
                     },
                     .RELAY => {
                         if (message.data.len == 14) {

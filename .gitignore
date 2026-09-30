@@ -6,3 +6,4 @@ backend/client/cache
 backend/NetworksButBetter/backend/src/.zig-cache
 backend/NetworksButBetter/backend/src/zig-out
 backend/NetworksButBetter/backend/src/app
+backend/NetworksButBetter/backend/src/testing

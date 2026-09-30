@@ -13,8 +13,12 @@ const Io = std.Io;
 // attempt to connect to reciever ip
 // if fails fall back to relaying
 var clientState: Networks.ClientState = undefined;
-const TESTING_RELAY: bool = true;
-const TESTING: bool = false;
+const TESTING_RELAY: bool = false;
+const TESTING: bool = true;
+
+// TODO: if only one device can get the local ip
+// TODO: but they are under the same public ip
+// TODO: then try to connect with client using local ip
 
 const Networks = struct {
     const ClientState = struct {
@@ -48,6 +52,7 @@ const Networks = struct {
         }
         fn sendResolved(self: *ClientState, io: Io, data: []u8) !void {
             try self.client_socket.send(io, &clientState.resolved_ip, data);
+            testPrint("using {any}\n", .{clientState.resolved_ip});
         }
         fn sendServer(self: *ClientState, io: Io, data: []u8) !void {
             try self.client_socket.send(io, &self.server_ip, data);
@@ -86,7 +91,7 @@ const Networks = struct {
             port |= bytes[5];
             const v: u32 = @bitCast(bytes[0..4].*);
             if (v == 0) {
-                return null;
+                std.debug.print("Local IP of other client not found\n", .{});
             }
             return .{ .ip4 = .{ .bytes = bytes[0..4].*, .port = port } };
         }
@@ -114,19 +119,19 @@ const Networks = struct {
                     try io.sleep(.fromMilliseconds(100), .awake);
                     continue;
                 }
-                if (clientState.reciever_local_ip) |ip| {
-                    try socket.send(io, &ip, ClientCode.getByte(.P2P) ++ "LOCAL IP");
+                const v: u32 = @bitCast(clientState.reciever_local_ip.?.ip4.bytes[0..4].*);
+                if (v != 0) {
+                    testPrint("v = {d}\n", .{v});
+                    try socket.send(io, &clientState.reciever_local_ip.?, ClientCode.getByte(.P2P) ++ "LOCAL IP");
                 }
-                if (clientState.reciever_public_ip) |ip| {
-                    try socket.send(io, &ip, ClientCode.getByte(.P2P) ++ "PUBLIC IP");
-                }
+                try socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.P2P) ++ "PUBLIC IP");
                 try io.sleep(.fromMilliseconds(100), .awake);
             }
             if (acknowledged) {
                 std.debug.print("Done Punching\n", .{});
                 return;
             }
-            std.debug.print("Failed to P2P\n", .{});
+            std.debug.print("Failed to P2P\nSwitching to relay\n", .{});
             clientState.cliendMode = .Relay;
             clientState.resolved_ip = clientState.server_ip;
             var initial: [7]u8 = undefined;
@@ -139,7 +144,6 @@ const Networks = struct {
                 const in = cin(io, &buffer);
                 try send(io, in);
                 if (std.mem.eql(u8, in, "EXIT")) return;
-                
             }
         }
         fn send(io: Io, buf: []u8) !void {
@@ -186,27 +190,42 @@ const Networks = struct {
                         }
                         if (message.data.len == 13) {
                             try clientState.parseInitialResponse(message.data[1..13].*);
-                            std.debug.print("Initial message: Other Client Public IP: {any} Local IP: {any}\n", .{ clientState.reciever_public_ip.?, clientState.reciever_local_ip.? });
+                            const p = clientState.reciever_public_ip.?.ip4.bytes;
+                            const l = clientState.reciever_local_ip.?.ip4.bytes;
+                            std.debug.print("Initial message: Other Client Public IP: {d}.{d}.{d}.{d}:{d} Local IP: {d}.{d}.{d}.{d}:{d}\n", .{ 
+                                p[0], p[1], p[2], p[3], clientState.reciever_public_ip.?.getPort(), l[0], l[1], l[2], l[3], clientState.reciever_local_ip.?.getPort() });
                         }
                     },
                     .TEXT => std.debug.print("recieved: {s}\n", .{message.data[1..]}),
                     .P2P => {
-                        try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, ClientCode.getByte(.ACK) ++ "LOCAL IP");
+                        testPrint("P2P: {s}\n", .{message.data[1..]});
+                        //clientState.reciever_local_ip.? = message.from;
+                        clientState.resolved_ip = message.from;
+                        const v: u32 = @bitCast(clientState.reciever_local_ip.?.ip4.bytes[0..4].*);
+                        if (v != 0) {
+                            testPrint("v = {d}\n", .{v});
+                            try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, ClientCode.getByte(.ACK) ++ "LOCAL IP");
+                        }
                         try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.ACK) ++ "PUBLIC IP");
                     },
                     .ACK => {
+                        testPrint("ACK: {s}\n", .{message.data[1..]});
                         if (acknowledged) continue;
-                        if (std.mem.eql(u8, message.data[1..], "LOCAL IP")) {
+                        if (std.mem.eql(u8, message.data[1..9], "LOCAL IP")) {
                             std.debug.print("USE LOCAL IP\n", .{});
                             clientState.resolved_ip = clientState.reciever_local_ip.?;
-                        } else if (std.mem.eql(u8, message.data[1..], "PUBLIC IP")) {
+                        } else if (std.mem.eql(u8, message.data[1..10], "PUBLIC IP")) {
                             std.debug.print("USE PUBLIC IP\n", .{});
                             clientState.resolved_ip = clientState.reciever_public_ip.?;
                         }
                         acknowledged = true;
                     },
                     .NONE => {
-                        if (std.mem.eql(u8, message.data[0..], "EXIT")) return;
+                        if (std.mem.eql(u8, message.data[0..], "EXIT")) {
+                            try send(io, message.data[0..]);
+                            std.debug.print("Disconnected\nEnter 'EXIT': ", .{});
+                            break;
+                        }
                         std.debug.print("Code not handled: {b}: {s}\n", .{ message.data[0], message.data[1..] });
                     },
                     else => std.debug.print("Not implemented yet!!: {any}\n", .{code}),
@@ -319,16 +338,14 @@ const FileManager = struct {
         const state_dir_name = if (TESTING) "testing/" ++ app_directory else app_directory;
         const cwd = std.Io.Dir.cwd();
 
-        return cwd.openDir(io, state_dir_name, .{})
-            catch try cwd.createDirPathOpen(io, state_dir_name, .{});
+        return cwd.openDir(io, state_dir_name, .{}) catch try cwd.createDirPathOpen(io, state_dir_name, .{});
     }
     fn getKeyFile(io: Io) !Io.File {
         const app_dir = try getAppDir(io);
         defer app_dir.close(io);
         const key_file_name = "key.txt";
 
-        return app_dir.openFile(io, key_file_name, .{ .mode = .read_write })
-                catch try app_dir.createFile(io, key_file_name, .{.read = true});
+        return app_dir.openFile(io, key_file_name, .{ .mode = .read_write }) catch try app_dir.createFile(io, key_file_name, .{ .read = true });
     }
     fn getKey(io: Io) ![8]u8 {
         const file = try getKeyFile(io);
@@ -353,11 +370,11 @@ const FileManager = struct {
             std.debug.print("len of key: {d}\n", .{len});
             return error.ErrorReadingKeyFromFile;
         }
-        if (TESTING) {
-            const result: [8]u8 = [_]u8{'5'} ** 8;
-            std.debug.print("Using Testing key\n", .{});
-            return result;
-        }
+        // if (TESTING) {
+        //     const result: [8]u8 = [_]u8{'5'} ** 8;
+        //     std.debug.print("Using Testing key\n", .{});
+        //     return result;
+        // }
         std.debug.print("Key Read: {s}\n", .{wbuf[0..8]});
         return wbuf[0..8].*;
     }
@@ -397,6 +414,10 @@ fn print(io: Io, comptime fmt: []const u8, args: anytype) void {
     lock.lock(io) catch unreachable;
     std.debug.print("\x1b[1A" ++ fmt ++ "\x1b[1E", args);
     lock.unlock(io);
+}
+fn testPrint(comptime fmt: []const u8, args: anytype) void {
+    if (!TESTING) return;
+    std.debug.print(fmt, args);
 }
 fn cin(io: std.Io, buffer: []u8) []u8 {
     var rBuffer: [256]u8 = undefined;
