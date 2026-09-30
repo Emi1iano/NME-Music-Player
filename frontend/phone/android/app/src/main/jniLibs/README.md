@@ -1,7 +1,7 @@
 # Native backend libraries (Emiliano's Zig client)
 
-`libbackend.so` is the Zig sync/library client from `backend/client` on the
-**backend** branch, compiled for Android. The app calls its single exported
+`libbackend.so` is the Zig sync/library client from `backend/client` (merged
+in from Emiliano's **backend** branch), compiled for Android. The app calls its single exported
 function through Dart FFI (see `lib/services/backend.dart`):
 
 ```c
@@ -14,20 +14,17 @@ int32_t clientAPI(const char* command); // 0 = ok, -1 = error
 | `armeabi-v7a/` | older 32-bit phones |
 | `x86_64/` | the Android emulator |
 
-**Built from:** backend branch commit `d408db0` (2026-09-30) with Zig 0.16.0,
-compiled by `tool/build_backend.sh` (the backend's own source, unmodified).
+**Built from:** `backend/client` in this branch (last source change `6be08b0`) on 2026-09-30 with Zig 0.16.0,
 
 ## Updating after backend changes
 
-From `frontend/phone`:
+The backend source lives in this branch at `backend/client`. To get
+Emiliano's latest work and rebuild, from the repo root:
 
 ```bash
-bash tool/build_backend.sh            # latest origin/backend
-bash tool/build_backend.sh 1a2b3c4    # or a specific commit
+git fetch origin && git merge origin/backend
+cd frontend/phone && bash tool/build_backend.sh
 ```
-
-The script checks the backend branch out into a temporary folder (it never
-changes that branch), builds all three libraries and copies them here.
 
 **Why not the backend's `zig build all`?** Its Android targets aren't linked
 against Android's C library, so phones refuse to load them
