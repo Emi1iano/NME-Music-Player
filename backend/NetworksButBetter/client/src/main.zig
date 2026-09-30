@@ -13,7 +13,8 @@ const Io = std.Io;
 // attempt to connect to reciever ip
 // if fails fall back to relaying
 var clientState: Networks.ClientState = undefined;
-const TESTING_RELAY: bool = false;
+const TESTING_RELAY: bool = true;
+const TESTING: bool = false;
 
 const Networks = struct {
     const ClientState = struct {
@@ -311,12 +312,77 @@ const Networks = struct {
         };
     };
 };
+
+const app_directory: []const u8 = "app/";
 const FileManager = struct {
+    fn getAppDir(io: Io) !Io.Dir {
+        const state_dir_name = if (TESTING) "testing/" ++ app_directory else app_directory;
+        const cwd = std.Io.Dir.cwd();
+
+        return cwd.openDir(io, state_dir_name, .{})
+            catch try cwd.createDirPathOpen(io, state_dir_name, .{});
+    }
+    fn getKeyFile(io: Io) !Io.File {
+        const app_dir = try getAppDir(io);
+        defer app_dir.close(io);
+        const key_file_name = "key.txt";
+
+        return app_dir.openFile(io, key_file_name, .{ .mode = .read_write })
+                catch try app_dir.createFile(io, key_file_name, .{.read = true});
+    }
     fn getKey(io: Io) ![8]u8 {
-        _ = io;
-        const result: [8]u8 = [_]u8{'5'} ** 8;
-        std.debug.print("Do getKey function\n", .{});
-        return result;
+        const file = try getKeyFile(io);
+        defer file.close(io);
+
+        var rbuf: [256]u8 = undefined;
+        var wbuf: [256]u8 = undefined;
+        var reader = file.reader(io, &rbuf);
+        var input = &reader.interface;
+        var writer = std.Io.Writer.fixed(&wbuf);
+
+        const len = try input.streamRemaining(&writer);
+        if (len == 0) {
+            std.debug.print("No Key Found, Generating New Key\n", .{});
+            const key = try generateNewKey(io);
+            std.debug.print("New Key Generated: {s}\n", .{key});
+            try writeKey(io, key);
+            std.debug.print("New Key Set\n", .{});
+            return key;
+        }
+        if (len != 8) {
+            std.debug.print("len of key: {d}\n", .{len});
+            return error.ErrorReadingKeyFromFile;
+        }
+        if (TESTING) {
+            const result: [8]u8 = [_]u8{'5'} ** 8;
+            std.debug.print("Using Testing key\n", .{});
+            return result;
+        }
+        std.debug.print("Key Read: {s}\n", .{wbuf[0..8]});
+        return wbuf[0..8].*;
+    }
+    fn generateNewKey(io: Io) ![8]u8 {
+        const seed: u64 = @bitCast(std.Io.Timestamp.now(io, .awake).toMicroseconds());
+        var rand = std.Random.DefaultPrng.init(seed);
+
+        var key: [8]u8 = undefined;
+        for (&key) |*c| {
+            const offset: u8 = @intCast(rand.next() % 10);
+            c.* = '0' + offset;
+        }
+        return key;
+    }
+    fn writeKey(io: Io, key: [8]u8) !void {
+        var file = try getKeyFile(io);
+        defer file.close(io);
+
+        var wBuffer: [128]u8 = undefined;
+        var writer = file.writer(io, &wBuffer);
+        var output = &writer.interface;
+
+        _ = try output.write(&key);
+        try output.flush();
+        try writer.end();
     }
 };
 
