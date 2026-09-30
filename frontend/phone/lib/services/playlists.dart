@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/playlist.dart';
+import 'app_log.dart';
 
 /// Playlists are saved as JSON in the app's private support folder.
 ///
@@ -32,7 +33,8 @@ class Playlists extends ChangeNotifier {
       try {
         final data = jsonDecode(await _file.readAsString()) as List;
         _items = data.map((e) => Playlist.fromMap(e as Map<String, dynamic>)).toList();
-      } catch (_) {
+      } catch (e, st) {
+        AppLog.instance.error('Saved playlists were unreadable; starting fresh', e, st);
         _items = [];
       }
     }

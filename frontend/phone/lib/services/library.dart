@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/album.dart';
 import '../models/artist.dart';
 import '../models/track.dart';
+import 'app_log.dart';
 import 'stats.dart';
 
 // The ways the Songs tab can be ordered (chosen with the ⇅ button).
@@ -104,6 +105,7 @@ class Library extends ChangeNotifier {
         : await getApplicationDocumentsDirectory();
     musicDir = Directory(p.join(base.path, 'Music'));
     await musicDir.create(recursive: true);
+    await _checkWritable();
 
     _artDir = Directory(p.join((await getApplicationCacheDirectory()).path, 'art'));
     await _artDir.create(recursive: true);
@@ -112,6 +114,23 @@ class Library extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getInt('sortMode') ?? 0;
     _sortMode = SortMode.values[saved.clamp(0, SortMode.values.length - 1)];
+  }
+
+  /// Makes sure the app can save files into its Music folder (needed for
+  /// Import songs). If a leftover folder from an older install belongs to a
+  /// different app user, Android blocks writes; this puts a clear explanation
+  /// in the debug log instead of a confusing "Permission denied" later.
+  Future<void> _checkWritable() async {
+    final probe = File(p.join(musicDir.path, '.write_test'));
+    try {
+      await probe.writeAsString('ok');
+      await probe.delete();
+    } catch (e) {
+      AppLog.instance.warning(
+          'Music folder is not writable, so Import songs will fail. '
+          'Fix: uninstall the app, delete ${musicDir.path} from a computer, '
+          'then reinstall.', e);
+    }
   }
 
   /// Reads every song in the Music folder and rebuilds the library.
@@ -126,9 +145,18 @@ class Library extends ChangeNotifier {
       final artPath = _artDir.path;
       // Isolate.run = do the heavy file reading on a separate thread,
       // so the UI stays smooth even with thousands of songs.
-      final files = await Isolate.run(() => _scanFolder(musicPath, artPath));
-      _build(files);
+      final watch = Stopwatch()..start();
+      final result = await Isolate.run(() => _scanFolder(musicPath, artPath));
+      _build(result.files);
       _sort();
+      // Record what happened so testers' logs show it.
+      AppLog.instance.info('Scanned Music folder: ${_tracks.length} songs, '
+          '${_albums.length} albums in ${watch.elapsedMilliseconds} ms');
+      for (final problem in result.problems) {
+        AppLog.instance.warning(problem);
+      }
+    } catch (e, st) {
+      AppLog.instance.error('Scanning the Music folder failed', e, st);
     } finally {
       // "finally" runs even if something above failed, so the spinner never gets stuck.
       _scanInProgress = false;
@@ -304,8 +332,11 @@ class _ScannedFile {
 }
 
 /// Runs in a background isolate so large folders don't freeze the UI.
-List<_ScannedFile> _scanFolder(String musicPath, String artPath) {
+/// Returns the songs it read, plus a message for each file it had trouble with.
+({List<_ScannedFile> files, List<String> problems}) _scanFolder(
+    String musicPath, String artPath) {
   final results = <_ScannedFile>[];
+  final problems = <String>[];
   final files = Directory(musicPath)
       .listSync(recursive: true, followLinks: false)
       .whereType<File>()
@@ -330,8 +361,10 @@ List<_ScannedFile> _scanFolder(String musicPath, String artPath) {
       discNumber = meta.discNumber;
       duration = meta.duration;
       cover = _saveCover(meta.pictures, file.path, modified, artPath);
-    } catch (_) {
-      // Unreadable or untagged file: fall back to the file name.
+    } catch (e) {
+      // Unreadable or untagged file: fall back to the file name, but note it
+      // in the debug log.
+      problems.add('Could not read tags of "${p.relative(file.path, from: musicPath)}": $e');
     }
 
     results.add(_ScannedFile(
@@ -352,7 +385,7 @@ List<_ScannedFile> _scanFolder(String musicPath, String artPath) {
       modified: modified,
     ));
   }
-  return results;
+  return (files: results, problems: problems);
 }
 
 // Returns [value], or [fallback] if the tag was missing or blank.

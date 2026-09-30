@@ -150,6 +150,11 @@ class _TopBar extends StatelessWidget {
           ),
           const Spacer(),
           IconButton(
+            tooltip: 'Import songs',
+            icon: const Icon(Icons.add_rounded),
+            onPressed: () => importSongs(context),
+          ),
+          IconButton(
             tooltip: 'Rescan music folder',
             icon: library.scanning
                 ? const SizedBox(
@@ -196,14 +201,31 @@ class _EmptyLibrary extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
-          Text(
-            howToAddMusic(),
+          const Text(
+            'Import songs from your phone (Downloads, Drive, Files...) '
+            'and they\'ll show up here.',
             textAlign: TextAlign.center,
-            style: const TextStyle(color: AppColors.textSecondary, height: 1.4),
+            style: TextStyle(color: AppColors.textSecondary, height: 1.4),
           ),
           const SizedBox(height: 24),
+          // The main way to add music: no computer needed.
           Center(
-            child: FilledButton.tonalIcon(
+            child: FilledButton.icon(
+              onPressed: () => importSongs(context),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Import songs'),
+            ),
+          ),
+          const SizedBox(height: 32),
+          // The old way still works, for people copying from a computer.
+          Text(
+            'Or: ${howToAddMusic()}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 12, height: 1.4),
+          ),
+          const SizedBox(height: 8),
+          Center(
+            child: TextButton.icon(
               onPressed: library.scan,
               icon: const Icon(Icons.refresh_rounded),
               label: const Text('Scan again'),

@@ -2,9 +2,13 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
+import '../services/app_log.dart';
 import '../services/library.dart';
 import '../theme.dart';
+import '../widgets/common.dart';
+import 'debug_log_screen.dart';
 import 'stats_screen.dart';
 
 /// Instructions for adding songs, different on iPhone vs Android.
@@ -35,6 +39,13 @@ class SettingsScreen extends StatelessWidget {
         builder: (context, _) => ListView(
           children: [
             const _Header('Library'),
+            ListTile(
+              leading: const Icon(Icons.add_rounded),
+              title: const Text('Import songs'),
+              subtitle: const Text('Copy songs from your phone into the library',
+                  style: TextStyle(color: AppColors.textSecondary)),
+              onTap: () => importSongs(context),
+            ),
             ListTile(
               leading: const Icon(Icons.folder_rounded),
               title: const Text('Music folder'),
@@ -74,11 +85,42 @@ class SettingsScreen extends StatelessWidget {
                 MaterialPageRoute(builder: (_) => const StatsScreen()),
               ),
             ),
+            const _Header('Troubleshooting'),
+            ListenableBuilder(
+              listenable: AppLog.instance,
+              builder: (context, _) {
+                final errors = AppLog.instance.errorCount;
+                return ListTile(
+                  leading: Icon(Icons.bug_report_rounded,
+                      color: errors > 0 ? Colors.redAccent : null),
+                  title: const Text('Debug log'),
+                  subtitle: Text(
+                    errors > 0
+                        ? '${errors == 1 ? '1 error' : '$errors errors'} this session — tap to view & share'
+                        : 'What the app is doing, to share when something goes wrong',
+                    style: const TextStyle(color: AppColors.textSecondary),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const DebugLogScreen()),
+                  ),
+                );
+              },
+            ),
             const _Header('About'),
-            const ListTile(
-              leading: Icon(Icons.info_outline_rounded),
-              title: Text('NME Music Player'),
-              subtitle: Text('Version 1.0.0', style: TextStyle(color: AppColors.textSecondary)),
+            // Version comes from pubspec.yaml (version: x.y.z+build).
+            FutureBuilder<PackageInfo>(
+              future: PackageInfo.fromPlatform(),
+              builder: (context, snap) => ListTile(
+                leading: const Icon(Icons.info_outline_rounded),
+                title: const Text('NME Music Player'),
+                subtitle: Text(
+                  snap.hasData
+                      ? 'Version ${snap.data!.version} (build ${snap.data!.buildNumber})'
+                      : 'Version …',
+                  style: const TextStyle(color: AppColors.textSecondary),
+                ),
+              ),
             ),
           ],
         ),

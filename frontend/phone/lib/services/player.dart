@@ -6,6 +6,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
 import '../models/track.dart';
+import 'app_log.dart';
 import 'library.dart';
 import 'stats.dart';
 
@@ -49,6 +50,14 @@ class Player {
     });
     // Check every second whether music is playing, and record it.
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+
+    // Playback errors (corrupt file, unsupported format...) go to the debug log.
+    audio.playbackEventStream.listen(
+      (_) {},
+      onError: (Object e, StackTrace st) {
+        AppLog.instance.error('Playback error on "${currentTrack?.id ?? 'unknown'}"', e, st);
+      },
+    );
   }
 
   void dispose() => _ticker?.cancel();
@@ -71,11 +80,28 @@ class Player {
   /// With [shuffle] and no [index], a random track plays first.
   Future<void> playTracks(List<Track> tracks, {int? index, bool? shuffle}) async {
     if (tracks.isEmpty) return;
-    final library = Library.instance;
     final useShuffle = shuffle ?? audio.shuffleModeEnabled;
     final start = index ?? (useShuffle ? Random().nextInt(tracks.length) : 0);
 
     _queue = List.of(tracks);
+    AppLog.instance.info('Play "${tracks[start].id}" '
+        '(${tracks.length} in queue${useShuffle ? ', shuffled' : ''})');
+    try {
+      await _load(start);
+    } catch (e, st) {
+      // e.g. the file was deleted since the last scan
+      AppLog.instance.error('Could not load "${tracks[start].id}"', e, st);
+      return;
+    }
+    if (useShuffle) await audio.shuffle();
+    await audio.setShuffleModeEnabled(useShuffle);
+    _startNewListen();
+    audio.play();
+  }
+
+  /// Hands the whole queue to just_audio, starting at [start].
+  Future<void> _load(int start) async {
+    final library = Library.instance;
     // Hand the whole list to the player as a queue. Each song gets a
     // MediaItem "tag" — that's the title/artist/art shown on the lock screen
     // and in the notification.
@@ -98,10 +124,6 @@ class Player {
       ],
       initialIndex: start,
     );
-    if (useShuffle) await audio.shuffle();
-    await audio.setShuffleModeEnabled(useShuffle);
-    _startNewListen();
-    audio.play();
   }
 
   /// Jumps to a track already in the queue (by its original index).

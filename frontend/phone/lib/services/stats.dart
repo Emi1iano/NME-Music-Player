@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/playback_stats.dart';
+import 'app_log.dart';
 
 /// Play counts and listening time per track, saved as JSON.
 ///
@@ -32,8 +33,9 @@ class Stats extends ChangeNotifier {
         final stats = PlaybackStats.fromMap(e as Map<String, dynamic>);
         _byTrack[stats.trackId] = stats;
       }
-    } catch (_) {
+    } catch (e, st) {
       // Corrupt file: start fresh rather than crash.
+      AppLog.instance.error('Saved listening stats were unreadable; starting fresh', e, st);
     }
   }
 

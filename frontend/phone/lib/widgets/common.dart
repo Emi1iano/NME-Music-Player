@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/playlist.dart';
 import '../models/track.dart';
+import '../services/importer.dart';
 import '../services/playlists.dart';
 import '../theme.dart';
 
@@ -179,6 +180,46 @@ Future<void> showAddToPlaylist(BuildContext context, Track track) async {
   messenger.showSnackBar(SnackBar(
     content: Text(added ? 'Added to ${chosen.name}' : 'Already in ${chosen.name}'),
   ));
+}
+
+/// The "Import songs" button action: opens the file picker, shows a spinner
+/// while copying, then a message like "Imported 3 songs".
+Future<void> importSongs(BuildContext context) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final navigator = Navigator.of(context);
+  var spinnerShown = false;
+
+  final result = await Importer.pickAndImport(
+    // Called after the user picks files, right before copying starts: show a
+    // spinner that can't be dismissed, so they don't leave mid-copy.
+    onCopyStart: (count) {
+      if (!context.mounted) return; // screen closed while the picker was open
+      spinnerShown = true;
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            content: Row(children: [
+              const CircularProgressIndicator(),
+              const SizedBox(width: 20),
+              Expanded(child: Text('Importing ${plural(count, 'song')}…')),
+            ]),
+          ),
+        ),
+      );
+    },
+  );
+  if (spinnerShown) navigator.pop(); // close the spinner
+
+  if (result.cancelled) return;
+  final parts = [
+    if (result.imported > 0) 'Imported ${plural(result.imported, 'song')}',
+    if (result.skipped > 0) '${result.skipped} already in library',
+    if (result.failed > 0) '${result.failed} failed (see Debug log)',
+  ];
+  messenger.showSnackBar(SnackBar(content: Text(parts.join(' • '))));
 }
 
 // ---- Text formatting helpers (covered by tests in test/widget_test.dart) ----
