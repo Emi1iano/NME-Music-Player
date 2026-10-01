@@ -1,7 +1,7 @@
 # Native backend libraries (Emiliano's Zig client)
 
-`libbackend.so` is the Zig sync/library client from `backend/client` (merged
-in from Emiliano's **backend** branch), compiled for Android. The app calls its single exported
+`libbackend.so` is Emiliano's Zig client (`backend/NetworksButBetter/backend/src`,
+merged in from his **backend** branch), compiled for Android. The app calls its single exported
 function through Dart FFI (see `lib/services/backend.dart`):
 
 ```c
@@ -14,11 +14,12 @@ int32_t clientAPI(const char* command); // 0 = ok, -1 = error
 | `armeabi-v7a/` | older 32-bit phones |
 | `x86_64/` | the Android emulator |
 
-**Built from:** `backend/client` in this branch (last source change `6be08b0`) on 2026-09-30 with Zig 0.16.0,
+**Built from:** `backend/NetworksButBetter/backend/src` in this branch (last source change `2564e4c`) on 2026-09-30 with Zig 0.16.0,
 
 ## Updating after backend changes
 
-The backend source lives in this branch at `backend/client`. To get
+The backend source lives in this branch at `backend/NetworksButBetter/backend/src`
+(set `BACKEND_SRC=backend/client/src` to build the older client). To get
 Emiliano's latest work and rebuild, from the repo root:
 
 ```bash

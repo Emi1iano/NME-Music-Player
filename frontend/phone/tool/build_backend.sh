@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Builds the Zig backend (backend/client in this repo) into the Android
+# Builds the Zig backend (Emiliano's client in this repo) into the Android
 # libraries this app loads: android/app/src/main/jniLibs/<abi>/libbackend.so
 #
-# By default it compiles the backend source in THIS branch. To pick up newer
+# By default it compiles backend/NetworksButBetter/backend/src (his current
+# client). BACKEND_SRC=backend/client/src builds the older client instead.
+# It compiles the source in THIS branch. To pick up newer
 # backend work, first merge Emiliano's branch into yours:
 #     git fetch origin && git merge origin/backend
 # then run this script again.
@@ -23,15 +25,16 @@ API=29   # Android 10+: first version whose libc has __tls_get_addr
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="$(git -C "$APP_DIR" rev-parse --show-toplevel)"
-SRC="$REPO/backend/client"
+SRC="$REPO/${BACKEND_SRC:-backend/NetworksButBetter/backend/src}"
 SDK="${ANDROID_HOME:-${LOCALAPPDATA:-$HOME}/Android/Sdk}"
 NDK="$(ls -d "$SDK"/ndk/* | sort -V | tail -1)"
 SYSROOT="$(ls -d "$NDK"/toolchains/llvm/prebuilt/*/sysroot | head -1)"
 command -v cygpath >/dev/null && SYSROOT="$(cygpath -m "$SYSROOT")"
 
-[ -f "$SRC/src/api.zig" ] || { echo "No backend source at $SRC (merge origin/backend first)"; exit 1; }
-COMMIT="$(git -C "$REPO" log -1 --format=%h -- backend/client/src)"
-echo "Building backend/client (last source change: $COMMIT) with Zig $("$ZIG" version)"
+[ -f "$SRC/api.zig" ] || { echo "No api.zig in $SRC (merge origin/backend first)"; exit 1; }
+REL="${SRC#$REPO/}"
+COMMIT="$(git -C "$REPO" log -1 --format=%h -- "$REL")"
+echo "Building $REL (last source change: $COMMIT) with Zig $("$ZIG" version)"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -53,13 +56,13 @@ EOF
   OUT="$APP_DIR/android/app/src/main/jniLibs/$ABI"
   mkdir -p "$OUT"
   # Build in a temp cache so nothing is written into backend/client.
-  (cd "$SRC" && "$ZIG" build-lib src/api.zig -dynamic -OReleaseFast \
+  (cd "$SRC" && "$ZIG" build-lib api.zig -dynamic -OReleaseFast \
       -target "$TARGET" -lc --libc "$LIBC_FILE" --name backend \
       --cache-dir "$TMP/zig-cache" -femit-bin="$OUT/libbackend.so")
   rm -f "$OUT"/*.o "$OUT"/*.pdb
   echo "  $ABI: $(wc -c < "$OUT/libbackend.so") bytes"
 done
 
-sed -i "s/^\*\*Built from:\*\*.*/**Built from:** \`backend\/client\` in this branch (last source change \`$COMMIT\`) on $(date +%Y-%m-%d) with Zig $("$ZIG" version),/" \
+sed -i "s#^\*\*Built from:\*\*.*#**Built from:** \`$REL\` in this branch (last source change \`$COMMIT\`) on $(date +%Y-%m-%d) with Zig $("$ZIG" version),#" \
   "$APP_DIR/android/app/src/main/jniLibs/README.md"
 echo "Done. Rebuild the app to include the new libraries."

@@ -16,10 +16,10 @@ import 'stats_screen.dart';
 /// Instructions for adding songs, different on iPhone vs Android.
 String howToAddMusic() {
   if (Platform.isIOS) {
-    return 'Open the Files app → On My iPhone → NME Music → app → music, and put your '
+    return 'Open the Files app → On My iPhone → NME Music → music, and put your '
         'songs there. You can also drag files in from a computer with Finder or iTunes.';
   }
-  // Show the folder the way it looks from a PC, e.g. Android/data/<id>/files/app/music
+  // Show the folder the way it looks from a PC, e.g. Android/data/<id>/files/music
   final path = Library.instance.musicDir.path;
   final i = path.indexOf('Android/data');
   return 'Connect your phone to a computer over USB and copy songs into\n'
@@ -133,9 +133,8 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-/// Settings → Sync: this device's key and the backend's status.
-/// Pairing with another device ("sync") comes once the backend supports
-/// being called from an app; for now: key, key regeneration, tracked songs.
+/// Settings → Sync: this device's key, songs sent to the backend, and the
+/// Sync panel for pairing with another device.
 class _SyncSection extends StatelessWidget {
   const _SyncSection();
 
@@ -206,16 +205,18 @@ class _SyncSection extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.autorenew_rounded),
             title: const Text('Generate new key'),
-            subtitle: const Text('Like changing a password',
-                style: TextStyle(color: AppColors.textSecondary)),
+            subtitle: Text(
+                backend.isSyncing ? 'Not while a sync is running' : 'Like changing a password',
+                style: const TextStyle(color: AppColors.textSecondary)),
+            enabled: !backend.isSyncing,
             onTap: () => _newKey(context),
           ),
           ListTile(
             leading: const Icon(Icons.library_add_check_rounded),
-            title: const Text('Songs tracked for syncing'),
+            title: const Text('Songs added to sync'),
             subtitle: Text(
-              '${backend.tracked.length} of ${Library.instance.tracks.length} songs. '
-              'Tap to register new ones',
+              '${backend.added.length} of ${Library.instance.tracks.length} songs sent to the '
+              'backend. Tap to add new ones',
               style: const TextStyle(color: AppColors.textSecondary),
             ),
             onTap: () => backend.registerNew(Library.instance.tracks.map((t) => t.id)),

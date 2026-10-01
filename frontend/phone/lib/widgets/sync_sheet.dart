@@ -172,11 +172,14 @@ class _StatusRow extends StatelessWidget {
         ),
       SyncState.connecting => (
           const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5)),
-          'Waiting for another device with this key…'
+          backend.syncPeer == null
+              ? 'Waiting for another device with this key…'
+              : 'Found ${backend.syncPeer}, connecting…'
         ),
       SyncState.paired => (
           const Icon(Icons.link_rounded, color: AppColors.accent),
           'Connected to ${backend.syncPeer ?? "the other device"}'
+              '${backend.syncMode == null ? '' : ' (${backend.syncMode})'}'
         ),
       SyncState.finished => (
           const Icon(Icons.check_circle_rounded, color: Colors.greenAccent),

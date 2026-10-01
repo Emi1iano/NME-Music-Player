@@ -99,17 +99,17 @@ class Library extends ChangeNotifier {
   /// Runs once at startup: finds/creates the Music folder and loads the
   /// saved sort choice.
   Future<void> init() async {
-    // Android: /storage/emulated/0/Android/data/<app id>/files/app/music
+    // Android: /storage/emulated/0/Android/data/<app id>/files/music
     //   (reachable from a PC over USB).
-    // iOS: <app>/Documents/app/music (visible in the Files app).
-    // The "app/music" layout is what Emiliano's backend expects (it keeps its
-    // state files next to it in app/state and app/cache).
+    // iOS: <app>/Documents/music (visible in the Files app).
+    // "music" next to the backend's own files is the layout Emiliano's
+    // backend expects.
     final base = Platform.isAndroid
         ? (await getExternalStorageDirectory() ??
             await getApplicationDocumentsDirectory())
         : await getApplicationDocumentsDirectory();
     baseDir = base.path;
-    musicDir = Directory(p.join(baseDir, 'app', 'music'));
+    musicDir = Directory(p.join(baseDir, 'music'));
     await musicDir.create(recursive: true);
     await _moveOldMusicFolder();
     await _checkWritable();
@@ -123,10 +123,11 @@ class Library extends ChangeNotifier {
     _sortMode = SortMode.values[saved.clamp(0, SortMode.values.length - 1)];
   }
 
-  /// Version 1.1 kept songs in `baseDir/Music`. Move them into app/music so
-  /// nobody's library disappears after updating.
+  /// Version 1.2 kept songs in `baseDir/app/music` (the old backend's
+  /// layout). Move them into `baseDir/music` so nobody's library disappears
+  /// after updating.
   Future<void> _moveOldMusicFolder() async {
-    final old = Directory(p.join(baseDir, 'Music'));
+    final old = Directory(p.join(baseDir, 'app', 'music'));
     if (!await old.exists()) return;
     var moved = 0;
     try {
@@ -137,7 +138,7 @@ class Library extends ChangeNotifier {
         moved++;
       }
       if (await old.list().isEmpty) await old.delete();
-      AppLog.instance.info('Moved $moved item(s) from the old Music folder to app/music');
+      AppLog.instance.info('Moved $moved item(s) from app/music to the music folder');
     } catch (e, st) {
       AppLog.instance.error('Could not move the old Music folder', e, st);
     }
