@@ -43,6 +43,7 @@ pub const Networks = struct {
         NONE = 0x7,
         FILE_HEAD = 0x8,
         FILE_CONTENT = 0x9,
+        TERMINATE = 0xA,
         
 
         pub fn getCode(byte: u8) ClientCode {
@@ -56,6 +57,7 @@ pub const Networks = struct {
                 0x6 => return ClientCode.RELAY,
                 0x8 => return ClientCode.FILE_HEAD,
                 0x9 => return ClientCode.FILE_CONTENT,
+                0xA => return ClientCode.TERMINATE,
                 else => return ClientCode.NONE,
             }
         }
@@ -68,6 +70,7 @@ pub const Networks = struct {
                 .P2P => return .{0x04},
                 .ACK => return .{0x05},
                 .RELAY => return .{0x06},
+                .TERMINATE => return .{0x0A},
                 else => unreachable,
             }
         }
@@ -119,10 +122,14 @@ pub const Networks = struct {
             for (&self.clients) |*client| {
                 if (client.* == null) continue;
                 const duration = client.*.?.timestamp.untilNow(io, .awake);
-                if (duration.toSeconds() > 10) {
+                if (duration.toSeconds() >= 5) {
+                    try self.server_socket.send(io, &client.*.?.public_ip, &ClientCode.getByte(.TERMINATE));
                     client.* = null;
+                    self.clients_size -= 1;
+                    std.debug.print("Client size: {d}\n", .{serverState.clients_size});
                 }
             }
+            
         }
         pub fn initialResponse(self: *ServerState, io: Io, ip: net.IpAddress, other: ClientConnection) !void {
             var response: [13]u8 = undefined;
@@ -211,7 +218,7 @@ pub const Networks = struct {
                 if (client.* != null) {
                     if (client.*.?.from_ip.eql(&ip)) {
                         from_client = client.*.?;
-                        try serverState.server_socket.send(io, &from_client.from_ip, "EXIT");
+                        try serverState.server_socket.send(io, &from_client.from_ip, &ClientCode.getByte(.TERMINATE));
                         client.* = null;
                         size -= 1;
                         break;
@@ -222,7 +229,7 @@ pub const Networks = struct {
                 if (client.* != null) {
                     if (from_client.from_ip.eql(&client.*.?.from_ip)) continue;
                     if (std.mem.eql(u8, &from_client.key, &client.*.?.key)) {
-                        try serverState.server_socket.send(io, &client.*.?.from_ip, "EXIT");
+                        try serverState.server_socket.send(io, &client.*.?.from_ip, &ClientCode.getByte(.TERMINATE));
                         client.* = null;
                         size -= 1;
                         break;
@@ -267,12 +274,17 @@ pub const Networks = struct {
                         print(io, "Client Size {d}\n", .{serverState.clients_size});
                     },
                     .RELAY => {
-                        if (message.data.len == 14) {
-                            if (std.mem.eql(u8, message.data[10..14], "EXIT")) {
+                        if (message.data.len == 10) {
+                            if (ClientCode.getCode(message.data[9]) == .TERMINATE) {
                                 try Temp.remove(io, message.from);
                                 print(io, "Relay Size {d}\n", .{Temp.size});
                                 continue;
                             }
+                            // if (std.mem.eql(u8, message.data[10..14], "EXIT")) {
+                            //     try Temp.remove(io, message.from);
+                            //     print(io, "Relay Size {d}\n", .{Temp.size});
+                            //     continue;
+                            // }
                         }
                         
                         try Temp.add(.init(message.from, message.data[1..9].*));

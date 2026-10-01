@@ -16,10 +16,6 @@ var clientState: Networks.ClientState = undefined;
 const TESTING_RELAY: bool = false;
 const TESTING: bool = true;
 
-// TODO: if only one device can get the local ip
-// TODO: but they are under the same public ip
-// TODO: then try to connect with client using local ip
-
 const Networks = struct {
     const ClientState = struct {
         client_socket: net.Socket = undefined,
@@ -31,6 +27,7 @@ const Networks = struct {
         lock: std.Io.Mutex = .init,
         cliendMode: ClientMode = ClientMode.P2P,
         recieved_inital_info: bool = false,
+        should_disconnect: bool = false,
 
         const ClientMode = enum(u8) {
             P2P,
@@ -50,9 +47,9 @@ const Networks = struct {
         fn sendResolvedWithCode(self: *ClientState, io: Io, cliendCode: ClientCode, comptime message: []const u8) !void {
             try self.client_socket.socket.send(io, &clientState.resolved_ip, ClientCode.getByte(cliendCode) ++ message);
         }
-        fn sendResolved(self: *ClientState, io: Io, data: []u8) !void {
+        fn sendResolved(self: *ClientState, io: Io, data: []const u8) !void {
             try self.client_socket.send(io, &clientState.resolved_ip, data);
-            testPrint("using {any}\n", .{clientState.resolved_ip});
+            //testPrint("using {any}\n", .{clientState.resolved_ip});
         }
         fn sendServer(self: *ClientState, io: Io, data: []u8) !void {
             try self.client_socket.send(io, &self.server_ip, data);
@@ -92,6 +89,7 @@ const Networks = struct {
             const v: u32 = @bitCast(bytes[0..4].*);
             if (v == 0) {
                 std.debug.print("Local IP of other client not found\n", .{});
+                return null;
             }
             return .{ .ip4 = .{ .bytes = bytes[0..4].*, .port = port } };
         }
@@ -111,18 +109,17 @@ const Networks = struct {
             try clientState.sendServer(io, &message);
         }
         fn punching(io: Io) !void {
-            while (!clientState.recieved_inital_info) try io.sleep(.fromMilliseconds(100), .awake);
+            while (!clientState.recieved_inital_info and !clientState.should_disconnect) try io.sleep(.fromMilliseconds(100), .awake);
             var socket = clientState.client_socket;
             for (0..30) |_| {
                 if (acknowledged) break;
+                if (clientState.should_disconnect) return;
                 if (TESTING_RELAY) {
                     try io.sleep(.fromMilliseconds(100), .awake);
                     continue;
                 }
-                const v: u32 = @bitCast(clientState.reciever_local_ip.?.ip4.bytes[0..4].*);
-                if (v != 0) {
-                    testPrint("v = {d}\n", .{v});
-                    try socket.send(io, &clientState.reciever_local_ip.?, ClientCode.getByte(.P2P) ++ "LOCAL IP");
+                if (clientState.reciever_local_ip) |ip| {
+                    try socket.send(io, &ip, ClientCode.getByte(.P2P) ++ "LOCAL IP");
                 }
                 try socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.P2P) ++ "PUBLIC IP");
                 try io.sleep(.fromMilliseconds(100), .awake);
@@ -139,6 +136,7 @@ const Networks = struct {
             try send(io, initial[0..]);
         }
         fn clientStart(io: Io) !void {
+            if (clientState.should_disconnect) return;
             var buffer: [256]u8 = undefined;
             while (true) {
                 const in = cin(io, &buffer);
@@ -149,7 +147,7 @@ const Networks = struct {
         fn send(io: Io, buf: []u8) !void {
             if (clientState.cliendMode == .P2P) {
                 if (std.mem.eql(u8, buf, "EXIT")) {
-                    try clientState.sendResolved(io, buf);
+                    try clientState.sendResolved(io, &ClientCode.getByte(.TERMINATE));
                     return;
                 }
                 var buffer: [256]u8 = undefined;
@@ -158,6 +156,15 @@ const Networks = struct {
                 try w.writeAll(buf);
                 try clientState.sendResolved(io, w.buffered());
             } else {
+                if (std.mem.eql(u8, buf, "EXIT")) {
+                    var buffer: [256]u8 = undefined;
+                    var w = std.Io.Writer.fixed(&buffer);
+                    try w.writeAll(&ClientCode.getByte(.RELAY));
+                    try w.writeAll(&clientState.key);
+                    try w.writeAll(&ClientCode.getByte(.TERMINATE));
+                    try clientState.sendResolved(io, w.buffered());
+                    return;
+                }
                 var buffer: [256]u8 = undefined;
                 var w = std.Io.Writer.fixed(&buffer);
                 try w.writeAll(&ClientCode.getByte(.RELAY));
@@ -192,8 +199,13 @@ const Networks = struct {
                         if (message.data.len == 13) {
                             try clientState.parseInitialResponse(message.data[1..13].*);
                             const p = clientState.reciever_public_ip.?.ip4.bytes;
-                            const l = clientState.reciever_local_ip.?.ip4.bytes;
-                            std.debug.print("Initial message: Other Client Public IP: {d}.{d}.{d}.{d}:{d} Local IP: {d}.{d}.{d}.{d}:{d}\n", .{ p[0], p[1], p[2], p[3], clientState.reciever_public_ip.?.getPort(), l[0], l[1], l[2], l[3], clientState.reciever_local_ip.?.getPort() });
+                            var l: [4]u8 = .{0,0,0,0};
+                            var lp: u16 = 0;
+                            if (clientState.reciever_local_ip) |ip| {
+                                l = ip.ip4.bytes;
+                                lp = ip.getPort();
+                            }
+                            std.debug.print("Initial message: Other Client Public IP: {d}.{d}.{d}.{d}:{d} Local IP: {d}.{d}.{d}.{d}:{d}\n", .{ p[0], p[1], p[2], p[3], clientState.reciever_public_ip.?.getPort(), l[0], l[1], l[2], l[3], lp });
                         }
                     },
                     .TEXT => std.debug.print("recieved: {s}\n", .{message.data[1..]}),
@@ -201,10 +213,12 @@ const Networks = struct {
                         testPrint("P2P: {s}\n", .{message.data[1..]});
                         //clientState.reciever_local_ip.? = message.from;
                         clientState.resolved_ip = message.from;
-                        const v: u32 = @bitCast(clientState.reciever_local_ip.?.ip4.bytes[0..4].*);
-                        if (v != 0) {
-                            testPrint("v = {d}\n", .{v});
-                            try clientState.client_socket.send(io, &clientState.reciever_local_ip.?, ClientCode.getByte(.ACK) ++ "LOCAL IP");
+                        if (clientState.reciever_local_ip) |ip| {
+                            try clientState.client_socket.send(io, &ip, ClientCode.getByte(.ACK) ++ "LOCAL IP");
+                        } else {
+                            if (eql(message.data[1..9], "LOCAL IP")) {
+                                clientState.reciever_local_ip = message.from;
+                            }
                         }
                         try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.ACK) ++ "PUBLIC IP");
                     },
@@ -221,12 +235,12 @@ const Networks = struct {
                         acknowledged = true;
                     },
                     .NONE => {
-                        if (std.mem.eql(u8, message.data[0..], "EXIT")) {
-                            try send(io, message.data[0..]);
-                            std.debug.print("Disconnected\nEnter 'EXIT': ", .{});
-                            break;
-                        }
                         std.debug.print("Code not handled: {b}: {s}\n", .{ message.data[0], message.data[1..] });
+                    },
+                    .TERMINATE => {
+                        std.debug.print("Disconnected\n", .{});
+                        clientState.should_disconnect = true;
+                        break;
                     },
                     else => std.debug.print("Not implemented yet!!: {any}\n", .{code}),
                 }
