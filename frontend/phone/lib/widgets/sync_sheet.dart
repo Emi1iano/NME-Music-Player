@@ -71,8 +71,8 @@ class _SyncSheet extends StatelessWidget {
               );
             }
             final key = backend.key;
-            final busy = backend.syncState == SyncState.connecting ||
-                backend.syncState == SyncState.paired;
+            final busy = backend.isSyncing;
+            final cancelling = backend.syncState == SyncState.cancelling;
             return Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -122,12 +122,28 @@ class _SyncSheet extends StatelessWidget {
                   ),
                 ],
                 const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: busy ? null : backend.startSync,
-                  icon: const Icon(Icons.sync_rounded),
-                  label: Text(busy ? 'Syncing…' : 'Sync now'),
-                  style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
-                ),
+                // While syncing, the main button becomes "Cancel sync".
+                if (busy)
+                  OutlinedButton.icon(
+                    onPressed: cancelling ? null : backend.cancelSync,
+                    icon: cancelling
+                        ? const SizedBox(
+                            width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.stop_circle_outlined),
+                    label: Text(cancelling ? 'Stopping…' : 'Cancel sync'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.redAccent,
+                      side: const BorderSide(color: Colors.redAccent),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed: backend.startSync,
+                    icon: const Icon(Icons.sync_rounded),
+                    label: const Text('Sync now'),
+                    style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
+                  ),
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
                   onPressed: busy ? null : () => _syncWithKey(context),
@@ -144,8 +160,7 @@ class _SyncSheet extends StatelessWidget {
                 ),
                 const Text(
                   'Experimental: both devices tap Sync now with the same key. '
-                  'The backend keeps the connection open, so close and reopen '
-                  'the app to stop it.',
+                  'The backend keeps the connection open until you tap Cancel sync.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
                 ),
@@ -180,6 +195,14 @@ class _StatusRow extends StatelessWidget {
           const Icon(Icons.link_rounded, color: AppColors.accent),
           'Connected to ${backend.syncPeer ?? "the other device"}'
               '${backend.syncMode == null ? '' : ' (${backend.syncMode})'}'
+        ),
+      SyncState.cancelling => (
+          const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5)),
+          'Stopping sync…'
+        ),
+      SyncState.cancelled => (
+          const Icon(Icons.stop_circle_outlined, color: AppColors.textSecondary),
+          'Sync cancelled'
         ),
       SyncState.finished => (
           const Icon(Icons.check_circle_rounded, color: Colors.greenAccent),

@@ -161,8 +161,7 @@ class _TopBar extends StatelessWidget {
           ListenableBuilder(
             listenable: Backend.instance,
             builder: (context, _) {
-              final state = Backend.instance.syncState;
-              final busy = state == SyncState.connecting || state == SyncState.paired;
+              final busy = Backend.instance.isSyncing;
               return IconButton(
                 tooltip: 'Sync',
                 icon: busy

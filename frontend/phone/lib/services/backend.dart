@@ -21,6 +21,8 @@ enum SyncState {
   idle,        // not started this session
   connecting,  // key sent to the server, waiting for another device
   paired,      // connected to the other device (directly or via the server)
+  cancelling,  // Cancel pressed: asking the backend to stop
+  cancelled,   // stopped by Cancel
   finished,    // the backend's sync returned 0
   failed,      // the backend's sync returned an error
 }
@@ -180,7 +182,10 @@ class Backend extends ChangeNotifier {
   // ------------------------------------------------------------------ sync
 
   SyncState syncState = SyncState.idle;
-  bool get isSyncing => syncState == SyncState.connecting || syncState == SyncState.paired;
+  bool get isSyncing =>
+      syncState == SyncState.connecting ||
+      syncState == SyncState.paired ||
+      syncState == SyncState.cancelling;
   String? syncPeer;              // "1.2.3.4:5678" once the server pairs us
   String? syncMode;              // "direct" or "through the server"
   DateTime? syncStartedAt;
@@ -210,6 +215,7 @@ class Backend extends ChangeNotifier {
     syncState = SyncState.connecting;
     syncPeer = null;
     syncMode = null;
+    _punchingDone = false;
     syncLines.clear();
     syncStartedAt = DateTime.now();
     notifyListeners();
@@ -225,7 +231,12 @@ class Backend extends ChangeNotifier {
       _readSyncOutput();
       final code = message is int ? message : -1;
       AppLog.instance.info('Backend < $command = $code');
-      syncState = code == 0 ? SyncState.finished : SyncState.failed;
+      final wasCancelling = syncState == SyncState.cancelling;
+      _stopCancelling();
+      syncState = wasCancelling
+          ? SyncState.cancelled
+          : (code == 0 ? SyncState.finished : SyncState.failed);
+      if (wasCancelling) AppLog.instance.info('Backend: sync cancelled');
       notifyListeners();
     });
     try {
@@ -261,17 +272,169 @@ class Backend extends ChangeNotifier {
       if (m != null) syncPeer = m.group(1);
       // Connected: directly ("Done Punching", "USE LOCAL/PUBLIC IP") or, if a
       // direct connection fails, relayed through the server.
+      final cancelling = syncState == SyncState.cancelling;
       if (line.contains('Done Punching') || line.startsWith('USE ')) {
-        syncState = SyncState.paired;
-        syncMode = 'direct';
+        _punchingDone = true;
+        if (!cancelling) {
+          syncState = SyncState.paired;
+          syncMode = 'direct';
+        }
       } else if (line.contains('Switching to relay')) {
-        syncState = SyncState.paired;
-        syncMode = 'through the server';
+        _punchingDone = true;
+        if (!cancelling) {
+          syncState = SyncState.paired;
+          syncMode = 'through the server';
+        }
       } else if (line.startsWith('Disconnected')) {
         syncMode = 'disconnected';
       }
     }
     notifyListeners();
+  }
+
+  // --------------------------------------------------------- cancelling sync
+
+  bool _punchingDone = false;        // the backend finished its connection attempts
+  RawDatagramSocket? _cancelSocket;  // our side of the local "pretend device"
+  Timer? _cancelTimer;
+  DateTime? _cancelStarted;
+
+  // The backend's message codes (backend/NetworksButBetter/backend/src/server.zig).
+  static const _codeInitial = 0x00;
+  static const _codeP2P = 0x04;
+  static const _codeAck = 0x05;
+
+  /// Stops a running sync without closing the app.
+  ///
+  /// The backend has no "stop" call, but its sync ends cleanly when it reads
+  /// "EXIT" as typed input and then receives an "EXIT" packet (its normal
+  /// disconnect). The app can do both:
+  ///  - typed input: we own its stdin pipe, so we "type" EXIT into it;
+  ///  - packets: its UDP socket listens on this phone, so we can send it
+  ///    packets on 127.0.0.1.
+  /// If no other device has been found yet, the backend is still waiting for
+  /// the server, so first we send it the server's "here's your partner"
+  /// message pointing at ourselves, and answer its connection attempt, so it
+  /// reaches the point where it reads input. Then EXIT ends it.
+  Future<void> cancelSync() async {
+    if (!isSyncing || syncState == SyncState.cancelling) return;
+    final before = syncState;
+    syncState = SyncState.cancelling;
+    _cancelStarted = DateTime.now();
+    notifyListeners();
+    AppLog.instance.info('Backend: cancelling sync');
+
+    final backendPort = _findBackendPort();
+    if (backendPort == null) {
+      // The sync is still running: say so instead of pretending it stopped.
+      AppLog.instance.warning('Backend: could not find the sync socket to stop it');
+      syncState = before;
+      notifyListeners();
+      return;
+    }
+    final socket = await RawDatagramSocket.bind(InternetAddress.loopbackIPv4, 0);
+    _cancelSocket = socket;
+    final backend = InternetAddress.loopbackIPv4;
+
+    // Answer the backend's connection attempts ("P2P") with an "ACK", so it
+    // finishes punching right away instead of after 30 tries.
+    socket.listen((event) {
+      if (event != RawSocketEvent.read) return;
+      final dg = socket.receive();
+      if (dg == null || dg.data.isEmpty) return;
+      if (dg.data[0] == _codeP2P) {
+        socket.send([_codeAck, ...'PUBLIC IP'.codeUnits], backend, backendPort);
+      }
+    });
+
+    // Still waiting for the server: hand it a partner (us).
+    if (syncPeer == null && !_punchingDone) {
+      final us = [127, 0, 0, 1, socket.port >> 8, socket.port & 0xff];
+      socket.send([_codeInitial, ...us, ...us], backend, backendPort);
+    }
+
+    // "Type" EXIT: once punching is done the backend reads it, tells the other
+    // side it's leaving, and stops reading input.
+    _typeToBackend('EXIT\n');
+
+    // Then its listener needs an "EXIT" packet to stop. Only send it after
+    // punching is done (if the listener stopped earlier, punching would wait
+    // forever). Keep nudging until the sync returns, for up to 15 seconds.
+    _cancelTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      _readSyncOutput();
+      if (_punchingDone) socket.send('EXIT'.codeUnits, backend, backendPort);
+      if (DateTime.now().difference(_cancelStarted!) > const Duration(seconds: 15)) {
+        // Still running: show it as running again so the user can retry.
+        AppLog.instance.warning('Backend: sync did not stop yet; try Cancel again '
+            'or close and reopen the app');
+        _stopCancelling();
+        syncState = _punchingDone ? SyncState.paired : before;
+        notifyListeners();
+      }
+    });
+  }
+
+  void _stopCancelling() {
+    _cancelTimer?.cancel();
+    _cancelTimer = null;
+    _cancelSocket?.close();
+    _cancelSocket = null;
+  }
+
+  /// The UDP port the backend's sync is using. It starts at 32145 and counts
+  /// up if that's taken. Apps can't read /proc/net/udp on Android 10+, so ask
+  /// the system about each of this app's open sockets instead (getsockname).
+  int? _findBackendPort() {
+    try {
+      final libc = DynamicLibrary.process();
+      final getsockname = libc.lookupFunction<Int32 Function(Int32, Pointer<Uint8>, Pointer<Uint32>),
+          int Function(int, Pointer<Uint8>, Pointer<Uint32>)>('getsockname');
+      final addr = malloc<Uint8>(128);
+      final len = malloc<Uint32>(1);
+      try {
+        // Only file descriptors that are sockets ("socket:[...]") are checked.
+        for (final entry in Directory('/proc/self/fd').listSync()) {
+          final fd = int.tryParse(p.basename(entry.path));
+          if (fd == null) continue;
+          String target;
+          try {
+            target = Link(entry.path).targetSync();
+          } catch (_) {
+            continue;
+          }
+          if (!target.startsWith('socket:')) continue;
+          len.value = 128;
+          if (getsockname(fd, addr, len) != 0) continue;
+          // sockaddr_in / sockaddr_in6: 2-byte family, then the port (big-endian).
+          final family = addr[0] | (addr[1] << 8);
+          if (family != 2 && family != 10) continue; // AF_INET, AF_INET6
+          final port = (addr[2] << 8) | addr[3];
+          if (port >= 32145 && port < 32145 + 100) return port;
+        }
+      } finally {
+        malloc.free(addr);
+        malloc.free(len);
+      }
+    } catch (e) {
+      AppLog.instance.warning('Backend: could not look up the sync socket', e);
+    }
+    return null;
+  }
+
+  /// Writes [text] into the backend's stdin, as if typed on a keyboard.
+  void _typeToBackend(String text) {
+    final fd = _stdinWriteFd;
+    if (fd == null) return;
+    final write = DynamicLibrary.process()
+        .lookupFunction<IntPtr Function(Int32, Pointer<Uint8>, IntPtr), int Function(int, Pointer<Uint8>, int)>('write');
+    final bytes = text.codeUnits;
+    final buf = malloc<Uint8>(bytes.length);
+    try {
+      buf.asTypedList(bytes.length).setAll(0, bytes);
+      write(fd, buf, bytes.length);
+    } finally {
+      malloc.free(buf);
+    }
   }
 
   /// Developer tool (Debug log → Run backend command): sends any command as
@@ -430,6 +593,8 @@ class Backend extends ChangeNotifier {
   /// has no keyboard: stdin is empty, so every read returns instantly and the
   /// loop would flood the other device with packets. Give stdin a pipe that
   /// we keep open but never write to, so that read simply waits instead.
+  int? _stdinWriteFd; // our end of the backend's stdin pipe
+
   void _blockStdin() {
     try {
       final libc = DynamicLibrary.process();
@@ -439,9 +604,12 @@ class Backend extends ChangeNotifier {
       try {
         if (pipe(fds) != 0 || dup2(fds[0], 0) < 0) {
           AppLog.instance.warning('Backend: could not set up stdin for sync');
+        } else {
+          _stdinWriteFd = fds[1];
         }
         // fds[1] (the write end) is deliberately left open for the app's
-        // lifetime: while it's open, reads from stdin wait instead of ending.
+        // lifetime: while it's open, reads from stdin wait instead of ending,
+        // and cancelSync() writes "EXIT" into it.
       } finally {
         malloc.free(fds);
       }
