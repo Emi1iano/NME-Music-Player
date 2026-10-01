@@ -421,6 +421,24 @@ class Backend extends ChangeNotifier {
     return null;
   }
 
+  /// Sends a text message to the connected device. The backend's sync reads
+  /// typed lines from stdin and sends each one to the other side (which
+  /// prints "recieved: ..."), so we "type" the message into its stdin pipe.
+  /// Returns false if not connected or the message isn't allowed.
+  bool sendSyncMessage(String text) {
+    final message = text.replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+    if (syncState != SyncState.paired || message.isEmpty) return false;
+    // "EXIT" is the backend's disconnect command: use Cancel sync for that.
+    if (message.toUpperCase() == 'EXIT') return false;
+    // The backend reads input into a 256-byte buffer.
+    final clipped = message.length > 200 ? message.substring(0, 200) : message;
+    _typeToBackend('$clipped\n');
+    syncLines.add('you: $clipped');
+    AppLog.instance.info('Backend: sent message "$clipped"');
+    notifyListeners();
+    return true;
+  }
+
   /// Writes [text] into the backend's stdin, as if typed on a keyboard.
   void _typeToBackend(String text) {
     final fd = _stdinWriteFd;

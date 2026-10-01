@@ -138,32 +138,6 @@ class SettingsScreen extends StatelessWidget {
 class _SyncSection extends StatelessWidget {
   const _SyncSection();
 
-  Future<void> _newKey(BuildContext context) async {
-    final backend = Backend.instance;
-    final messenger = ScaffoldMessenger.of(context);
-    // Changing the key is like changing a password: warn first.
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: const Text('Generate a new key?'),
-        content: const Text(
-            'Other devices will need the new key to sync with this phone.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Generate')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    final before = backend.key;
-    final key = await backend.generateNewKey();
-    messenger.showSnackBar(SnackBar(
-      content: Text(key != null && key != before
-          ? 'New key: $key'
-          : 'Could not make a new key. See Debug log'),
-    ));
-  }
-
   @override
   Widget build(BuildContext context) {
     final backend = Backend.instance;
@@ -209,7 +183,7 @@ class _SyncSection extends StatelessWidget {
                 backend.isSyncing ? 'Not while a sync is running' : 'Like changing a password',
                 style: const TextStyle(color: AppColors.textSecondary)),
             enabled: !backend.isSyncing,
-            onTap: () => _newKey(context),
+            onTap: () => confirmNewKey(context),
           ),
           ListTile(
             leading: const Icon(Icons.library_add_check_rounded),

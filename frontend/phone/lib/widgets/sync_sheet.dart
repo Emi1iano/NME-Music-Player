@@ -16,8 +16,57 @@ Future<void> showSyncSheet(BuildContext context) {
   );
 }
 
-class _SyncSheet extends StatelessWidget {
+/// "Generate new key" (Sync panel and Settings). Changing the key is like
+/// changing a password, so ask first.
+Future<void> confirmNewKey(BuildContext context) async {
+  final backend = Backend.instance;
+  final messenger = ScaffoldMessenger.of(context);
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (c) => AlertDialog(
+      title: const Text('Generate a new key?'),
+      content: const Text('Other devices will need the new key to sync with this phone.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Generate')),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  final before = backend.key;
+  final key = await backend.generateNewKey();
+  messenger.showSnackBar(SnackBar(
+    content: Text(key != null && key != before
+        ? 'New key: ${key.substring(0, 4)} ${key.substring(4)}'
+        : 'Could not make a new key. See Debug log'),
+  ));
+}
+
+class _SyncSheet extends StatefulWidget {
   const _SyncSheet();
+
+  @override
+  State<_SyncSheet> createState() => _SyncSheetState();
+}
+
+class _SyncSheetState extends State<_SyncSheet> {
+  final _message = TextEditingController(); // "Send test message" box
+
+  @override
+  void dispose() {
+    _message.dispose();
+    super.dispose();
+  }
+
+  void _send() {
+    final text = _message.text;
+    if (text.trim().toUpperCase() == 'EXIT') {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Use Cancel sync to disconnect')));
+      return;
+    }
+    if (Backend.instance.sendSyncMessage(text)) _message.clear();
+  }
 
   /// "Use another device's key": both devices need the SAME key to pair.
   Future<void> _syncWithKey(BuildContext context) async {
@@ -121,6 +170,31 @@ class _SyncSheet extends StatelessWidget {
                     ),
                   ),
                 ],
+                // Send a text message to the connected device (the backend
+                // sends each typed line to the other side).
+                if (backend.syncState == SyncState.paired) ...[
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _message,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _send(),
+                        decoration: const InputDecoration(
+                          hintText: 'Send a test message',
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      tooltip: 'Send',
+                      onPressed: _send,
+                      icon: const Icon(Icons.send_rounded),
+                    ),
+                  ]),
+                ],
                 const SizedBox(height: 16),
                 // While syncing, the main button becomes "Cancel sync".
                 if (busy)
@@ -150,6 +224,12 @@ class _SyncSheet extends StatelessWidget {
                   icon: const Icon(Icons.key_rounded),
                   label: const Text("Use another device's key"),
                 ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: busy ? null : () => confirmNewKey(context),
+                  icon: const Icon(Icons.autorenew_rounded),
+                  label: const Text('Generate new key'),
+                ),
                 const SizedBox(height: 4),
                 TextButton.icon(
                   onPressed: () => Navigator.of(context).push(
@@ -159,8 +239,9 @@ class _SyncSheet extends StatelessWidget {
                   label: const Text('Open Debug log'),
                 ),
                 const Text(
-                  'Experimental: both devices tap Sync now with the same key. '
-                  'The backend keeps the connection open until you tap Cancel sync.',
+                  'Experimental: both devices tap Sync now with the same key. Once '
+                  'connected you can send test messages; the connection stays open '
+                  'until you tap Cancel sync.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
                 ),
