@@ -1,53 +1,27 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 
-/// A frosted-glass panel: blurs whatever's behind it, then lays a
-/// translucent tint + soft light border on top. This is the building
-/// block for the iOS-style "glass" look — every surface (sidebar,
-/// transport bar, cards) should be built from this instead of a flat
-/// opaque Container.
 class Glass extends StatelessWidget {
   final Widget child;
-  final BorderRadius borderRadius;
-  final double blur;
-  final Color tint;
-  final double tintOpacity;
-  final Color borderColor;
-  final EdgeInsetsGeometry? padding;
-  final List<BoxShadow>? shadows;
-
-  const Glass({
-    super.key,
-    required this.child,
-    this.borderRadius = BorderRadius.zero,
-    this.blur = 24,
-    this.tint = Colors.white,
-    this.tintOpacity = 0.06,
-    this.borderColor = const Color(0x33FFFFFF),
-    this.padding,
-    this.shadows,
-  });
-
+  final double radius;
+  final EdgeInsets pad;
+  const Glass({super.key, required this.child, this.radius = 28, this.pad = const EdgeInsets.all(20)});
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext c) {
+    final r = BorderRadius.circular(radius);
     return ClipRRect(
-      borderRadius: borderRadius,
+      borderRadius: r,
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
         child: Container(
-          padding: padding,
+          padding: pad,
           decoration: BoxDecoration(
-            borderRadius: borderRadius,
-            color: tint.withOpacity(tintOpacity),
-            border: Border.all(color: borderColor, width: 1),
-            boxShadow: shadows,
+            borderRadius: r,
+            border: Border.all(color: Colors.white.withOpacity(.30), width: 1.2),
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [
-                Colors.white.withOpacity(0.10),
-                Colors.white.withOpacity(0.02),
-              ],
+              colors: [Colors.white.withOpacity(.22), Colors.white.withOpacity(.07)],
             ),
           ),
           child: child,
@@ -57,54 +31,25 @@ class Glass extends StatelessWidget {
   }
 }
 
-/// Soft, blurred color blobs placed behind the glass UI so there's
-/// actually something colorful for the frosted panels to refract.
-/// Without this, glass panels over a flat background just look like
-/// dim gray boxes.
-class AmbientBackground extends StatelessWidget {
-  const AmbientBackground({super.key});
-
+class Backdrop extends StatelessWidget {
+  const Backdrop({super.key});
+  Widget blob(Color col, double s) =>
+      Container(width: s, height: s, decoration: BoxDecoration(shape: BoxShape.circle, color: col));
   @override
-  Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Container(color: const Color(0xFF0B0B10)),
-        Positioned(
-          top: -120,
-          left: -80,
-          child: _Blob(size: 420, color: const Color(0xFFC08A4E).withOpacity(0.35)),
+  Widget build(BuildContext c) => Stack(fit: StackFit.expand, children: [
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xFFF2B27A), Color(0xFFE08A5B), Color(0xFF3B4A3A), Color(0xFF1C2A1F)],
+              stops: [0, .42, .72, 1],
+            ),
+          ),
         ),
-        Positioned(
-          top: 120,
-          right: -140,
-          child: _Blob(size: 380, color: const Color(0xFF4E7FC0).withOpacity(0.28)),
-        ),
-        Positioned(
-          bottom: -160,
-          left: 60,
-          child: _Blob(size: 460, color: const Color(0xFF9CB86B).withOpacity(0.22)),
-        ),
-      ],
-    );
-  }
-}
-
-class _Blob extends StatelessWidget {
-  final double size;
-  final Color color;
-  const _Blob({required this.size, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(shape: BoxShape.circle, color: color),
-    ).let((w) => ImageFiltered(imageFilter: ImageFilter.blur(sigmaX: 90, sigmaY: 90), child: w));
-  }
-}
-
-extension _Let<T> on T {
-  R let<R>(R Function(T) f) => f(this);
+        Positioned(left: -80, top: 60, child: blob(const Color(0x88FFD9A0), 320)),
+        Positioned(right: -60, top: 240, child: blob(const Color(0x66E8622A), 280)),
+        Positioned(left: 200, bottom: -120, child: blob(const Color(0x5590B070), 340)),
+        BackdropFilter(filter: ImageFilter.blur(sigmaX: 50, sigmaY: 50), child: const SizedBox.expand()),
+      ]);
 }

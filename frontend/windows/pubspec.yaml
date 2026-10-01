@@ -7,9 +7,11 @@ environment:
   sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
+  ffi: ^2.2.0
   flutter:
     sdk: flutter
   google_fonts: ^6.2.1
+  shared_preferences: ^2.5.5
   # Add later, when you wire up real playback / networking:
   # just_audio: ^0.9.40        -> local audio playback
   # web_socket_channel: ^2.4.5 -> talking to your Zig sync server
