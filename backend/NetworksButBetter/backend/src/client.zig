@@ -193,8 +193,7 @@ const Networks = struct {
                             try clientState.parseInitialResponse(message.data[1..13].*);
                             const p = clientState.reciever_public_ip.?.ip4.bytes;
                             const l = clientState.reciever_local_ip.?.ip4.bytes;
-                            std.debug.print("Initial message: Other Client Public IP: {d}.{d}.{d}.{d}:{d} Local IP: {d}.{d}.{d}.{d}:{d}\n", .{ 
-                                p[0], p[1], p[2], p[3], clientState.reciever_public_ip.?.getPort(), l[0], l[1], l[2], l[3], clientState.reciever_local_ip.?.getPort() });
+                            std.debug.print("Initial message: Other Client Public IP: {d}.{d}.{d}.{d}:{d} Local IP: {d}.{d}.{d}.{d}:{d}\n", .{ p[0], p[1], p[2], p[3], clientState.reciever_public_ip.?.getPort(), l[0], l[1], l[2], l[3], clientState.reciever_local_ip.?.getPort() });
                         }
                     },
                     .TEXT => std.debug.print("recieved: {s}\n", .{message.data[1..]}),
@@ -446,7 +445,7 @@ pub fn main(init: std.process.Init) !void {
 pub fn start(io: Io, args: []const [:0]const u8) !void {
     clientState = .init(io);
     defer clientState.deinit(io);
-    
+
     switch (args.len) {
         0 => {
             try Networks.Client.start(io);
@@ -473,7 +472,7 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
         },
         else => {
             testPrint("Invalid args\n", .{});
-        }
+        },
     }
 }
 

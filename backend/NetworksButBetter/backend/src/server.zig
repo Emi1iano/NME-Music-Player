@@ -15,13 +15,14 @@ pub const Networks = struct {
     const ClientConnection = struct {
         public_ip: std.Io.net.IpAddress = undefined,
         local_ip: ?std.Io.net.IpAddress = null,
+        timestamp: Io.Timestamp,
         key: [8]u8 = undefined,
 
-        pub fn init(buffer: [14]u8, public_ip: std.Io.net.IpAddress) ClientConnection {
+        pub fn init(buffer: [14]u8, public_ip: std.Io.net.IpAddress, timestamp: Io.Timestamp) ClientConnection {
             const local_ip = getLocalIp(buffer[0..6]);
             const key = buffer[6..14];
 
-            return .{ .public_ip = public_ip, .local_ip = local_ip, .key = key.* };
+            return .{ .public_ip = public_ip, .local_ip = local_ip, .key = key.*, .timestamp = timestamp };
         }
         fn getLocalIp(bytes: []const u8) std.Io.net.IpAddress {
             var port: u16 = 0;
@@ -111,6 +112,15 @@ pub const Networks = struct {
                     x.* = null;
                     y.* = null;
                     self.clients_size -= 2;
+                }
+            }
+        }
+        fn cleanUp(self: *ServerState, io: Io) !void {
+            for (&self.clients) |*client| {
+                if (client.* == null) continue;
+                const duration = client.*.?.timestamp.untilNow(io, .awake);
+                if (duration.toSeconds() > 10) {
+                    client.* = null;
                 }
             }
         }
@@ -247,7 +257,7 @@ pub const Networks = struct {
                             print(io, "Invalid Client Message: {s}\n", .{message.data});
                             continue;
                         }
-                        const connection = Networks.ClientConnection.init(message.data[1..15].*, message.from);
+                        const connection = Networks.ClientConnection.init(message.data[1..15].*, message.from, Io.Timestamp.now(io, .awake));
                         const p = connection.public_ip.ip4;
                         const l = connection.local_ip.?.ip4;
                         print(io, "Public: {d}.{d}.{d}.{d}:{d}, Local: {d}.{d}.{d}.{d}:{d} Connected with key: {s}\n", .{ p.bytes[0], p.bytes[1], p.bytes[2], p.bytes[3], p.port, l.bytes[0], l.bytes[1], l.bytes[2], l.bytes[3], l.port, connection.key });
@@ -278,9 +288,8 @@ pub const Networks = struct {
         fn workerThread(io: Io) !void {
             std.debug.print("size: {d}\n", .{serverState.clients_size});
             while (true) {
-                //print(io, "size: {d}", .{serverState.clients_size});
-
-                try io.sleep(.fromMilliseconds(100), .awake);
+                try io.sleep(.fromSeconds(1), .awake);
+                try serverState.cleanUp(io);
             }
         }
         fn bindSocket(io: Io) !std.Io.net.Socket {
