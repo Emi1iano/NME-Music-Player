@@ -9,6 +9,7 @@ import '../services/backend.dart';
 import '../services/library.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/sync_sheet.dart';
 import 'debug_log_screen.dart';
 import 'stats_screen.dart';
 
@@ -219,12 +220,13 @@ class _SyncSection extends StatelessWidget {
             ),
             onTap: () => backend.registerNew(Library.instance.tracks.map((t) => t.id)),
           ),
-          const ListTile(
-            leading: Icon(Icons.devices_rounded),
-            title: Text('Sync with another device'),
-            subtitle: Text('Coming soon (waiting on the backend)',
+          ListTile(
+            leading: const Icon(Icons.devices_rounded),
+            title: const Text('Sync with another device'),
+            subtitle: const Text('Experimental: pair two devices that use the same key',
                 style: TextStyle(color: AppColors.textSecondary)),
-            enabled: false,
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => showSyncSheet(context),
           ),
         ]);
       },

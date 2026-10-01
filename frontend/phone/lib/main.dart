@@ -74,7 +74,11 @@ class _NmeMusicAppState extends State<NmeMusicApp> {
         AppLog.instance.info('App went to background');
         Stats.instance.flush();
       },
-      onResume: () => AppLog.instance.info('App came back to foreground'),
+      onResume: () {
+        AppLog.instance.info('App came back to foreground');
+        // Pick up songs added while the app was away (e.g. copied over USB).
+        Library.instance.scan();
+      },
       onDetach: Stats.instance.flush,
     );
   }

@@ -14,6 +14,15 @@ import 'app_log.dart';
 typedef _ClientApiC = Int32 Function(Pointer<Utf8> command);
 typedef _ClientApiDart = int Function(Pointer<Utf8> command);
 
+/// Where a sync is at, for the Sync panel.
+enum SyncState {
+  idle,        // not started this session
+  connecting,  // key sent to the server, waiting for another device
+  paired,      // the server matched us with another device
+  finished,    // the backend's sync returned 0
+  failed,      // the backend's sync returned an error
+}
+
 /// The bridge between the Flutter app and the Zig backend (libbackend.so).
 ///
 /// The backend is a command-line style API: we send it a text command like
@@ -24,8 +33,8 @@ typedef _ClientApiDart = int Function(Pointer<Utf8> command);
 ///   app/state/history.txt changes waiting to be synced
 ///   app/cache/key.txt   this device's 8-digit sync key
 ///
-/// Supported for now: add, rename, sync_new_key. ("sync" itself still waits
-/// for keyboard input, so it can't be called from an app yet.)
+/// Supported: add, rename, sync_new_key, and sync (experimental: it never
+/// returns, so it runs in its own isolate; see startSync).
 class Backend extends ChangeNotifier {
   // Singleton: one bridge for the whole app (Backend.instance).
   Backend._();
@@ -74,6 +83,7 @@ class Backend extends ChangeNotifier {
     // current folder starts as "/" (not writable). Point it at our data folder.
     Directory.current = baseDir;
     _captureStderr();
+    _blockStdin();
     AppLog.instance.info('Backend: loaded $_libName, working folder $baseDir');
 
     key = await readKey();
@@ -151,6 +161,86 @@ class Backend extends ChangeNotifier {
     AppLog.instance.info('Backend: new sync key generated');
     notifyListeners();
     return newKey;
+  }
+
+  // ------------------------------------------------------------------ sync
+
+  SyncState syncState = SyncState.idle;
+  String? syncPeer;              // "1.2.3.4:5678" once the server pairs us
+  DateTime? syncStartedAt;
+  final List<String> syncLines = []; // the backend's messages during this sync
+  Timer? _syncPoll;
+
+  /// `sync`: sends this phone's key to the pairing server and waits for
+  /// another device with the same key, then connects to it directly.
+  ///
+  /// The backend's sync doesn't return (it keeps the connection open), so it
+  /// runs in its OWN background isolate instead of the command queue; add,
+  /// rename and sync_new_key keep working meanwhile. Its messages are read
+  /// every second and shown in the Sync panel and the debug log.
+  ///
+  /// [withKey]: another device's key, to pair with that device. The backend
+  /// saves it as this phone's key too (`sync [key]`).
+  Future<void> startSync({String? withKey}) async {
+    if (!available || syncState == SyncState.connecting || syncState == SyncState.paired) return;
+    if (withKey != null && !RegExp(r'^\d{8}$').hasMatch(withKey)) return;
+    final command = withKey == null ? 'sync' : 'sync $withKey';
+    if (withKey != null) key = withKey;
+    syncState = SyncState.connecting;
+    syncPeer = null;
+    syncLines.clear();
+    syncStartedAt = DateTime.now();
+    notifyListeners();
+    _logBackendOutput(); // skip older output so the panel only shows this sync
+
+    AppLog.instance.info('Backend > $command');
+    await AppLog.instance.flush();
+
+    final done = ReceivePort();
+    done.listen((message) {
+      done.close();
+      _syncPoll?.cancel();
+      _readSyncOutput();
+      final code = message is int ? message : -1;
+      AppLog.instance.info('Backend < $command = $code');
+      syncState = code == 0 ? SyncState.finished : SyncState.failed;
+      notifyListeners();
+    });
+    try {
+      await Isolate.spawn(_syncEntry, (command, done.sendPort),
+          onError: done.sendPort, debugName: 'backend-sync');
+    } catch (e, st) {
+      done.close();
+      AppLog.instance.error('Backend: could not start sync', e, st);
+      syncState = SyncState.failed;
+      notifyListeners();
+      return;
+    }
+    _syncPoll = Timer.periodic(const Duration(seconds: 1), (_) => _readSyncOutput());
+  }
+
+  /// Background isolate entry point: runs the (long) sync command, then
+  /// reports its exit code back to the app.
+  static void _syncEntry((String, SendPort) args) {
+    final (command, done) = args;
+    done.send(_callNative(command));
+  }
+
+  /// Copies new backend output into the panel and works out the status from
+  /// the backend's own messages (e.g. "Connecting with 1.2.3.4:5678").
+  void _readSyncOutput() {
+    final lines = _logBackendOutput();
+    if (lines.isEmpty) return;
+    syncLines.addAll(lines);
+    if (syncLines.length > 200) syncLines.removeRange(0, syncLines.length - 200);
+    for (final line in lines) {
+      final m = RegExp(r'Connecting with (\S+)').firstMatch(line);
+      if (m != null) {
+        syncPeer = m.group(1);
+        syncState = SyncState.paired;
+      }
+    }
+    notifyListeners();
   }
 
   /// Developer tool (Debug log → Run backend command): sends any command as
@@ -279,20 +369,48 @@ class Backend extends ChangeNotifier {
     }
   }
 
-  /// Copies new lines the backend printed into the debug log.
-  void _logBackendOutput() {
+  /// Copies new lines the backend printed into the debug log, and returns them.
+  List<String> _logBackendOutput() {
+    final lines = <String>[];
     try {
       final bytes = _stderrFile.readAsBytesSync();
-      if (bytes.length <= _stderrRead) return;
+      if (bytes.length <= _stderrRead) return lines;
       final text = String.fromCharCodes(bytes.sublist(_stderrRead)).trim();
       _stderrRead = bytes.length;
       for (final line in text.split('\n')) {
         // Skip noise the Android emulator's graphics driver writes to stderr.
         if (line.trim().isEmpty || line.startsWith('s_gl')) continue;
         AppLog.instance.info('Backend says: ${line.trim()}');
+        lines.add(line.trim());
       }
     } catch (_) {
       // No output file yet: nothing to copy.
+    }
+    return lines;
+  }
+
+  /// After pairing, the backend's sync reads typed messages from "stdin"
+  /// (cin) in an endless loop and sends each line to the other device. An app
+  /// has no keyboard: stdin is empty, so every read returns instantly and the
+  /// loop would flood the other device with packets. Give stdin a pipe that
+  /// we keep open but never write to, so that read simply waits instead.
+  void _blockStdin() {
+    try {
+      final libc = DynamicLibrary.process();
+      final pipe = libc.lookupFunction<Int32 Function(Pointer<Int32>), int Function(Pointer<Int32>)>('pipe');
+      final dup2 = libc.lookupFunction<Int32 Function(Int32, Int32), int Function(int, int)>('dup2');
+      final fds = malloc<Int32>(2);
+      try {
+        if (pipe(fds) != 0 || dup2(fds[0], 0) < 0) {
+          AppLog.instance.warning('Backend: could not set up stdin for sync');
+        }
+        // fds[1] (the write end) is deliberately left open for the app's
+        // lifetime: while it's open, reads from stdin wait instead of ending.
+      } finally {
+        malloc.free(fds);
+      }
+    } catch (e) {
+      AppLog.instance.warning('Backend: could not set up stdin for sync', e);
     }
   }
 

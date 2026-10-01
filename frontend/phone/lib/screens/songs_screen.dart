@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../models/track.dart';
+import '../services/backend.dart';
 import '../services/library.dart';
 import '../services/player.dart';
 import '../services/stats.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/sync_sheet.dart';
 import '../widgets/track_tile.dart';
 import 'now_playing_screen.dart';
 import 'settings_screen.dart';
@@ -154,13 +156,22 @@ class _TopBar extends StatelessWidget {
             icon: const Icon(Icons.add_rounded),
             onPressed: () => importSongs(context),
           ),
-          IconButton(
-            tooltip: 'Rescan music folder',
-            icon: library.scanning
-                ? const SizedBox(
-                    width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.refresh_rounded),
-            onPressed: library.scanning ? null : library.scan,
+          // Sync with another device (the library rescans by itself: at
+          // startup, when you come back to the app, and after imports).
+          ListenableBuilder(
+            listenable: Backend.instance,
+            builder: (context, _) {
+              final state = Backend.instance.syncState;
+              final busy = state == SyncState.connecting || state == SyncState.paired;
+              return IconButton(
+                tooltip: 'Sync',
+                icon: busy
+                    ? const SizedBox(
+                        width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.sync_rounded),
+                onPressed: () => showSyncSheet(context),
+              );
+            },
           ),
           PopupMenuButton<SortMode>(
             tooltip: 'Sort',
