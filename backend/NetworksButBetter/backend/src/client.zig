@@ -1,7 +1,7 @@
 const std = @import("std");
 const net = std.Io.net;
 const builtin = @import("builtin");
-const ClientCode = @import("server").Networks.ClientCode;
+const ClientCode = @import("server.zig").Networks.ClientCode;
 
 const Io = std.Io;
 
@@ -173,6 +173,7 @@ const Networks = struct {
             try sendInitialServerMessage(io);
             try punching(io);
             try clientStart(io);
+            //try Syncing.sync(io);
 
             GlobalListeningThread.join();
         }
@@ -232,6 +233,12 @@ const Networks = struct {
                 }
             }
         }
+        const Syncing = struct {
+            fn sync(io: Io) !void {
+                _ = io;
+                return;
+            }
+        };
         const LocalIp = struct {
             fn getLocalIp(io: Io) ![4]u8 {
                 switch (builtin.os.tag) {
@@ -335,10 +342,10 @@ const Networks = struct {
 const app_directory: []const u8 = "app/";
 const FileManager = struct {
     fn getAppDir(io: Io) !Io.Dir {
-        const state_dir_name = if (TESTING) "testing/" ++ app_directory else app_directory;
+        const app_dir_name = if (TESTING) "testing/" ++ app_directory else app_directory;
         const cwd = std.Io.Dir.cwd();
 
-        return cwd.openDir(io, state_dir_name, .{}) catch try cwd.createDirPathOpen(io, state_dir_name, .{});
+        return cwd.openDir(io, app_dir_name, .{}) catch try cwd.createDirPathOpen(io, app_dir_name, .{});
     }
     fn getKeyFile(io: Io) !Io.File {
         const app_dir = try getAppDir(io);
@@ -401,12 +408,73 @@ const FileManager = struct {
         try output.flush();
         try writer.end();
     }
+    fn getMusicDir(io: Io) !Io.Dir {
+        const music_dir_name = "music";
+        const cwd = std.Io.Dir.cwd();
+
+        return cwd.openDir(io, music_dir_name, .{}) catch try cwd.createDirPathOpen(io, music_dir_name, .{});
+    }
+    // FILE HEAD
+    // path to file
+    // FILE CONTENT
+    // file content
+    // fn sendFile(io: Io, file: Io.File) !void {
+    //     var rbuf: [1024]u8 = undefined;
+    //     var wbuf: [1024]u8 = undefined;
+    //     var file_name: [256]u8 = undefined;
+    //     const len = try file.realPath(io, &file_name[1..]);
+    //     var rfile = file.reader(io, &rbuf);
+    //     var reader = &rfile.interface;
+    //     var writer = Io.Writer.fixed(&wbuf);
+
+    //     // wbuf[0] = ClientCode.getByte(.FILE_CONTENT)
+    //     // clientState.sendResolved(io, file_name)
+
+    //     // while (reader.stream(&writer, .unlimited)) |_| {
+    //     //     clientState.sendResolved(io, data: []u8)
+    //     // }
+    // }
 };
 
 pub fn main(init: std.process.Init) !void {
-    clientState = .init(init.io);
-    defer clientState.deinit(init.io);
-    try Networks.Client.start(init.io);
+    const alloc = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(alloc);
+    defer alloc.free(args[0..]);
+
+    try start(init.io, args[1..]);
+}
+pub fn start(io: Io, args: []const [:0]const u8) !void {
+    clientState = .init(io);
+    defer clientState.deinit(io);
+    
+    switch (args.len) {
+        0 => {
+            try Networks.Client.start(io);
+        },
+        1 => {
+            if (eql(args[0], "sync")) {
+                try Networks.Client.start(io);
+            } else if (eql(args[0], "sync_new_key")) {
+                try FileManager.writeKey(io, try FileManager.generateNewKey(io));
+            }
+        },
+        2 => {
+            if (eql(args[0], "sync")) {
+                if (args[1].len != 8) return error.KeyWrongLength;
+                var key: [8]u8 = undefined;
+                @memcpy(&key, args[1][0..8]);
+
+                try Networks.Client.start(io);
+            } else if (eql(args[0], "add")) {
+                testPrint("add command not implemented\n", .{});
+            } else if (eql(args[0], "rename")) {
+                testPrint("rename command not implemented\n", .{});
+            }
+        },
+        else => {
+            testPrint("Invalid args\n", .{});
+        }
+    }
 }
 
 var lock = std.Io.Mutex.init;
@@ -431,4 +499,7 @@ fn cin(io: std.Io, buffer: []u8) []u8 {
     if (builtin.os.tag == .windows) {
         return buffer[0 .. len - 1];
     } else return buffer[0..len];
+}
+fn eql(a: []const u8, b: []const u8) bool {
+    return std.mem.eql(u8, a, b);
 }

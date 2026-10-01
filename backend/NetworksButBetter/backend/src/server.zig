@@ -40,6 +40,8 @@ pub const Networks = struct {
         ACK = 0x5,
         RELAY = 0x6,
         NONE = 0x7,
+        FILE_HEAD = 0x8,
+        FILE_CONTENT = 0x9,
         
 
         pub fn getCode(byte: u8) ClientCode {
@@ -51,6 +53,8 @@ pub const Networks = struct {
                 0x4 => return ClientCode.P2P,
                 0x5 => return ClientCode.ACK,
                 0x6 => return ClientCode.RELAY,
+                0x8 => return ClientCode.FILE_HEAD,
+                0x9 => return ClientCode.FILE_CONTENT,
                 else => return ClientCode.NONE,
             }
         }
