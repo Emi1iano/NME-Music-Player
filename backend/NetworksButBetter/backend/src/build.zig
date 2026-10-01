@@ -4,9 +4,10 @@ const build_targets = struct {
     target: std.Target.Query,
     path: []const u8,
 };
-const targets: [2]build_targets = .{
+const targets: [3]build_targets = .{
     .{ .target = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc }, .path = "windows" },
     .{ .target = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .android }, .path = "android/arm64" },
+    .{ .target = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .android }, .path = "android/x86_64" },
 };
 
 pub fn build(b: *std.Build) void {

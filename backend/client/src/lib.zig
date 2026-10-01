@@ -86,11 +86,11 @@ const SYNCING = struct {
             try client_socket.send(io, &other_client, "PUNCH");
         }
         std.debug.print("Using {any} to connect to {any}\n", .{client_socket.address, other_client});
-        var cinbuf: [128]u8 = undefined;
-        while (true) {
-            const in = cin(io, &cinbuf);
-            try client_socket.send(io, &other_client, in);
-        }
+        // var cinbuf: [128]u8 = undefined;
+        // while (true) {
+        //     const in = cin(io, &cinbuf);
+        //     try client_socket.send(io, &other_client, in);
+        // }
         try client_socket.send(io, &other_client, "STOP");
 
         var gpa: std.heap.ArenaAllocator = .init(std.heap.page_allocator);

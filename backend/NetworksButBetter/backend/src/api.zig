@@ -1,5 +1,5 @@
 const std = @import("std");
-// const lib = @import("lib.zig");
+const lib = @import("client.zig");
 
 // add [path] - path needs to be relative to the music folder and be a path to a file
 // rename [path]  - path needs to be relative to the music folder and be a path to a file
@@ -15,16 +15,15 @@ export fn clientAPI(string: [*:0]const u8) callconv(.c) i32 {
     var alloc = gpa.allocator();
 
     var list = std.ArrayList([:0]const u8).initCapacity(alloc, 4) catch return -1;
-    list.append(alloc, "dummy") catch return -1;
     while (it.next()) |arg| {
         const arg_z = alloc.dupeZ(u8, arg) catch return -1;
         list.append(alloc, arg_z) catch return -1;
     }
 
-    // var thread: std.Io.Threaded = .init(alloc, .{});
-    // defer thread.deinit();
-    // const io = thread.io();
+    var thread: std.Io.Threaded = .init(alloc, .{});
+    defer thread.deinit();
+    const io = thread.io();
 
-    // lib.handleArgs(io, list.items) catch return -1;
+    lib.start(io, list.items) catch return -1;
     return 0;
 }
