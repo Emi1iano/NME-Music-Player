@@ -13,8 +13,9 @@ const Io = std.Io;
 // attempt to connect to reciever ip
 // if fails fall back to relaying
 var clientState: Networks.ClientState = undefined;
-const TESTING_RELAY: bool = false;
+const TESTING_RELAY: bool = true;
 const TESTING: bool = true;
+const CHAT_MODE: bool = false;
 
 const Networks = struct {
     const ClientState = struct {
@@ -38,7 +39,7 @@ const Networks = struct {
             return .{
                 .client_socket = getClientSocket(io) catch unreachable,
                 .server_ip = getServerIp() catch unreachable,
-                .key = FileManager.getKey(io) catch unreachable,
+                .key = FileManager.KeyStuff.getKey(io) catch unreachable,
             };
         }
         fn deinit(self: *ClientState, io: Io) void {
@@ -144,7 +145,7 @@ const Networks = struct {
                 if (std.mem.eql(u8, in, "EXIT")) return;
             }
         }
-        fn send(io: Io, buf: []u8) !void {
+        fn send(io: Io, buf: []const u8) !void {
             if (clientState.cliendMode == .P2P) {
                 if (std.mem.eql(u8, buf, "EXIT")) {
                     try clientState.sendResolved(io, &ClientCode.getByte(.TERMINATE));
@@ -179,13 +180,26 @@ const Networks = struct {
 
             try sendInitialServerMessage(io);
             try punching(io);
-            try clientStart(io);
-            //try Syncing.sync(io);
+            if (!clientState.should_disconnect) {
+                if (CHAT_MODE) {
+                    try clientStart(io);
+                } else {
+                    try Syncing.sync(io);
+                }
+            }
 
             GlobalListeningThread.join();
         }
         fn listen(io: Io) !void {
             var buffer: [1024]u8 = undefined;
+
+            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer gpa.deinit();
+            var writer = Io.Writer.Allocating.init(gpa.allocator());
+            defer writer.deinit();
+            var action: FileManager.Changes.Action = undefined;
+
+
             while (true) {
                 const message = try clientState.client_socket.receive(io, &buffer);
                 const code = ClientCode.getCode(message.data[0]);
@@ -234,6 +248,21 @@ const Networks = struct {
                         }
                         acknowledged = true;
                     },
+                    .DATA => {
+                        if (eql(message.data[1..], "FILE")) action = .ADD
+                        else if (eql(message.data[1..], "STOP")) switch (action) {
+                            .ADD => {
+                                try Syncing.recieveFile(io, &writer.writer);
+                                _ = writer.writer.consumeAll();
+                            },
+                            else => {
+                                testPrint("Not implemented: {any}\n", .{action});
+                            }
+                        } else {
+                            try writer.writer.writeAll(message.data[1..]);
+                        }
+                        
+                    },
                     .NONE => {
                         std.debug.print("Code not handled: {b}: {s}\n", .{ message.data[0], message.data[1..] });
                     },
@@ -248,8 +277,100 @@ const Networks = struct {
         }
         const Syncing = struct {
             fn sync(io: Io) !void {
-                _ = io;
-                return;
+                var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+                defer gpa.deinit();
+
+                const list = try FileManager.Changes.getChanges(io, gpa.allocator());
+                for (list.items) |e| {
+                    switch (e.action) {
+                        .ADD => {
+                            testPrint("{any}: {s}\n", .{e.action, e.path});
+                            try sendFile(io, e.path);
+                        },
+                        else => {
+                            testPrint("Not implemented {any}\n", .{e.action});
+                        }
+                    }
+                }
+                testPrint("DONE SENDING STUFF\n", .{});
+                // const exit = "EXIT";
+                // try send(io, exit);
+            }
+            fn sendFile(io: Io, path: []const u8) !void {
+                var file = try Io.Dir.openFileAbsolute(io, path, .{});
+                defer file.close(io);
+                const basename = std.fs.path.basename(path);
+                
+                var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+                defer gpa.deinit();
+
+                var rbuf: [1024*4]u8 = undefined;
+                var fr = file.reader(io, &rbuf);
+                var reader = &fr.interface;
+                const data = try reader.allocRemaining(gpa.allocator(), .unlimited);
+                var buufferedr = Io.Reader.fixed(data);
+
+                switch (clientState.cliendMode) {
+                    .P2P => {
+                        var senddata: [1024]u8 = undefined;
+                        senddata[0] = ClientCode.getByte(.DATA)[0];
+
+                        try clientState.sendResolved(io, ClientCode.getByte(.DATA) ++ "FILE");
+                        const header = try std.fmt.bufPrint(senddata[1..], "{d:0>8}{s}{d:0>8}", .{basename.len, basename, data.len});
+                        testPrint("file header: {s}\n", .{header});
+                        try clientState.sendResolved(io, senddata[0..header.len+1]);
+
+                        while (true) {
+                            const d = buufferedr.take(1023) catch break;
+                            @memcpy(senddata[1..], d);
+                            try clientState.sendResolved(io, senddata[0..d.len+1]);
+                        }
+                        try clientState.sendResolved(io, ClientCode.getByte(.DATA) ++ "STOP");
+                    },
+                    .Relay => {
+                        var senddata: [1024]u8 = undefined;
+                        const header = try std.fmt.bufPrint(senddata[0..], "{s}{s}{s}", .{ClientCode.getByte(.RELAY), clientState.key, ClientCode.getByte(.DATA)});
+
+                        @memcpy(senddata[header.len..header.len+4], "FILE");
+                        try clientState.sendResolved(io, senddata[0..header.len+4]);
+
+                        const fheader = try std.fmt.bufPrint(senddata[header.len..], "{d:0>8}{s}{d:0>8}", .{basename.len, basename, data.len});
+                        testPrint("file header: {s}\n", .{fheader});
+                        try clientState.sendResolved(io, senddata[0..header.len+fheader.len]);
+
+                        while (true) {
+                            const d = buufferedr.take(1024-header.len) catch break;
+                            @memcpy(senddata[header.len..], d);
+                            try clientState.sendResolved(io, senddata[0..d.len+1]);
+                        }
+
+                        @memcpy(senddata[header.len..header.len+4], "STOP");
+                        try clientState.sendResolved(io, senddata[0..header.len+4]);
+                    }
+                }
+
+            }
+            fn recieveFile(io: Io, writer: *Io.Writer) !void {
+                testPrint("recieved header: {s}\n", .{writer.buffer[0..20]});
+                const name_len = stringToNum(writer.buffer[0..8]);
+                const name = writer.buffer[8..8+name_len];
+                const content_len = stringToNum(writer.buffer[8+name_len..16+name_len]);
+                const content = writer.buffer[16+name_len..16+name_len+content_len];
+
+                testPrint("adding file {s} len: {d}\n", .{name, content_len});
+
+                var dir = try FileManager.getMusicDir(io);
+                defer dir.close(io);
+
+                var file = try dir.createFile(io, name, .{ .read = true });
+                defer file.close(io);
+
+                var wbuf: [1024*4]u8 = undefined;
+                var fwriter = file.writer(io, &wbuf);
+                var fw = &fwriter.interface;
+
+                try fw.writeAll(content);
+                try fw.flush();
             }
         };
         const LocalIp = struct {
@@ -360,93 +481,320 @@ const FileManager = struct {
 
         return cwd.openDir(io, app_dir_name, .{}) catch try cwd.createDirPathOpen(io, app_dir_name, .{});
     }
-    fn getKeyFile(io: Io) !Io.File {
-        const app_dir = try getAppDir(io);
-        defer app_dir.close(io);
-        const key_file_name = "key.txt";
-
-        return app_dir.openFile(io, key_file_name, .{ .mode = .read_write }) catch try app_dir.createFile(io, key_file_name, .{ .read = true });
-    }
-    fn getKey(io: Io) ![8]u8 {
-        const file = try getKeyFile(io);
-        defer file.close(io);
-
-        var rbuf: [256]u8 = undefined;
-        var wbuf: [256]u8 = undefined;
-        var reader = file.reader(io, &rbuf);
-        var input = &reader.interface;
-        var writer = std.Io.Writer.fixed(&wbuf);
-
-        const len = try input.streamRemaining(&writer);
-        if (len == 0) {
-            std.debug.print("No Key Found, Generating New Key\n", .{});
-            const key = try generateNewKey(io);
-            std.debug.print("New Key Generated: {s}\n", .{key});
-            try writeKey(io, key);
-            std.debug.print("New Key Set\n", .{});
-            return key;
-        }
-        if (len != 8) {
-            std.debug.print("len of key: {d}\n", .{len});
-            return error.ErrorReadingKeyFromFile;
-        }
-        // if (TESTING) {
-        //     const result: [8]u8 = [_]u8{'5'} ** 8;
-        //     std.debug.print("Using Testing key\n", .{});
-        //     return result;
-        // }
-        std.debug.print("Key Read: {s}\n", .{wbuf[0..8]});
-        return wbuf[0..8].*;
-    }
-    fn generateNewKey(io: Io) ![8]u8 {
-        const seed: u64 = @bitCast(std.Io.Timestamp.now(io, .awake).toMicroseconds());
-        var rand = std.Random.DefaultPrng.init(seed);
-
-        var key: [8]u8 = undefined;
-        for (&key) |*c| {
-            const offset: u8 = @intCast(rand.next() % 10);
-            c.* = '0' + offset;
-        }
-        return key;
-    }
-    fn writeKey(io: Io, key: [8]u8) !void {
-        var file = try getKeyFile(io);
-        defer file.close(io);
-
-        var wBuffer: [128]u8 = undefined;
-        var writer = file.writer(io, &wBuffer);
-        var output = &writer.interface;
-
-        _ = try output.write(&key);
-        try output.flush();
-        try writer.end();
-    }
     fn getMusicDir(io: Io) !Io.Dir {
         const music_dir_name = "music";
         const cwd = std.Io.Dir.cwd();
 
         return cwd.openDir(io, music_dir_name, .{}) catch try cwd.createDirPathOpen(io, music_dir_name, .{});
     }
-    // FILE HEAD
-    // path to file
-    // FILE CONTENT
-    // file content
-    // fn sendFile(io: Io, file: Io.File) !void {
-    //     var rbuf: [1024]u8 = undefined;
-    //     var wbuf: [1024]u8 = undefined;
-    //     var file_name: [256]u8 = undefined;
-    //     const len = try file.realPath(io, &file_name[1..]);
-    //     var rfile = file.reader(io, &rbuf);
-    //     var reader = &rfile.interface;
-    //     var writer = Io.Writer.fixed(&wbuf);
+    fn getOrCreateFile(io: Io, name: []const u8) !Io.File {
+        const app_dir = try getAppDir(io);
+        defer app_dir.close(io);
 
-    //     // wbuf[0] = ClientCode.getByte(.FILE_CONTENT)
-    //     // clientState.sendResolved(io, file_name)
+        return app_dir.openFile(io, name, .{ .mode = .read_write }) catch 
+        try app_dir.createFile(io, name, .{ .read = true });
+    }
+    const KeyStuff = struct {
+        fn getKeyFile(io: Io) !Io.File {
+            return getOrCreateFile(io, "key.txt");
+        }
+        fn getKey(io: Io) ![8]u8 {
+            const file = try getKeyFile(io);
+            defer file.close(io);
 
-    //     // while (reader.stream(&writer, .unlimited)) |_| {
-    //     //     clientState.sendResolved(io, data: []u8)
-    //     // }
-    // }
+            var rbuf: [256]u8 = undefined;
+            var wbuf: [256]u8 = undefined;
+            var reader = file.reader(io, &rbuf);
+            var input = &reader.interface;
+            var writer = std.Io.Writer.fixed(&wbuf);
+
+            const len = try input.streamRemaining(&writer);
+            if (len == 0) {
+                std.debug.print("No Key Found, Generating New Key\n", .{});
+                const key = try generateNewKey(io);
+                std.debug.print("New Key Generated: {s}\n", .{key});
+                try writeKey(io, key);
+                std.debug.print("New Key Set\n", .{});
+                return key;
+            }
+            if (len != 8) {
+                std.debug.print("len of key: {d}\n", .{len});
+                return error.ErrorReadingKeyFromFile;
+            }
+            // if (TESTING) {
+            //     const result: [8]u8 = [_]u8{'5'} ** 8;
+            //     std.debug.print("Using Testing key\n", .{});
+            //     return result;
+            // }
+            std.debug.print("Key Read: {s}\n", .{wbuf[0..8]});
+            return wbuf[0..8].*;
+        }
+        fn generateNewKey(io: Io) ![8]u8 {
+            const seed: u64 = @bitCast(std.Io.Timestamp.now(io, .awake).toMicroseconds());
+            var rand = std.Random.DefaultPrng.init(seed);
+
+            var key: [8]u8 = undefined;
+            for (&key) |*c| {
+                const offset: u8 = @intCast(rand.next() % 10);
+                c.* = '0' + offset;
+            }
+            return key;
+        }
+        fn writeKey(io: Io, key: [8]u8) !void {
+            var file = try getKeyFile(io);
+            defer file.close(io);
+
+            var wBuffer: [128]u8 = undefined;
+            var writer = file.writer(io, &wBuffer);
+            var output = &writer.interface;
+
+            _ = try output.write(&key);
+            try output.flush();
+            try writer.end();
+        }
+    };
+    fn fileToToken(io: Io, file: Io.File, alloc: std.mem.Allocator) !std.mem.TokenIterator(u8, .any) {
+        var rbuf: [256]u8 = undefined;
+        var reader = file.reader(io, &rbuf);
+        var rf = &reader.interface;
+        const data = try rf.allocRemaining(alloc, .unlimited);
+
+        return std.mem.tokenizeAny(u8, data, "\r\n");
+    }
+    const MusicPath = struct {
+        fn getMusicPathsFile(io: Io) !Io.File {
+            return getOrCreateFile(io, "musicDirPaths.txt");
+        }
+        fn addPathToFile(io: Io, path: []const u8) !void {
+            //testPrint("{s}\n", .{path});
+            var file = try getMusicPathsFile(io);
+            defer file.close(io);
+            
+            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer gpa.deinit();
+
+            var it = try fileToToken(io, file, gpa.allocator());
+            while (it.next()) |entry|{
+                if (eql(path, entry)) {
+                    return;
+                }
+            }
+
+            var wbuf: [256]u8 = undefined;
+            var writer = file.writer(io, &wbuf);
+            var wf = &writer.interface;
+
+            try writer.seekTo(try file.length(io));
+            _ = try wf.writeAll(path);
+            try wf.writeByte('\n');
+            try wf.flush();
+        }
+        fn deletePath(io: Io, path: []const u8) !void {
+            var file = try getMusicPathsFile(io);
+            defer file.close(io);
+
+            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer gpa.deinit();
+
+            var wbuf: [256]u8 = undefined;
+            var writer = file.writer(io, &wbuf);
+            try file.setLength(io, 0);
+            var wf = &writer.interface;
+
+            var it = fileToToken(io, file, gpa.allocator());
+            while (it.next()) |entry|{
+                if (!eql(path, entry)) {
+                    try wf.writeAll(entry);
+                    try wf.writeByte('\n');
+                }
+            }
+            try wf.flush();
+        }
+        fn addPath(io: Io, cwd: Io.Dir, path: []const u8) !void {
+            try addPathToFile(io, path);
+            const basename = std.fs.path.basename(path);
+            for (1..basename.len) |i| {
+                if (basename[basename.len-i] == '.') {
+                    try MusicTable.addEntry(io, cwd, path);
+                    return;
+                }
+            }
+            try addFolder(io, cwd, path);
+        }
+        fn addFolder(io: Io, cwd: Io.Dir, path: []const u8) !void {
+            const dir = try cwd.openDir(io, path, .{.iterate = true});
+            defer dir.close(io);
+
+            var it = dir.iterate();
+
+            while (it.next(io)) |entry| {
+                if (entry == null) break;
+                switch (entry.?.kind) {
+                    .file => {
+                        try MusicTable.addEntry(io, dir, entry.?.name);
+                    },
+                    .directory => {
+                        try addFolder(io, dir, entry.?.name);
+                    },
+                    else => {}
+                }
+            } else |_| {}
+        }
+    };
+    const MusicTable = struct {
+        const Entry = struct {
+            id: usize,
+            hash: []const u8,
+            path: []const u8,
+        };
+        fn getMusicTableFile(io: Io) !Io.File {
+            return getOrCreateFile(io, "musicTable.txt");
+        }
+        fn addEntry(io: Io, dir: Io.Dir, path: []const u8) !void {
+            var file = try getMusicTableFile(io);
+            defer file.close(io);
+            const song = try dir.openFile(io, path, .{});
+            defer song.close(io);
+
+            var pathbuf: [256]u8 = undefined;
+            const pathlen = try dir.realPathFile(io, path, &pathbuf);
+
+            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer gpa.deinit();
+
+            const list = try parseMusicTableFile(io, gpa.allocator());
+
+            const hash = try hashFile(io, song);
+            for (list.items) |e| {
+                if (eql(&hash, e.hash)) {
+                    testPrint("Song {s} already included\n", .{path});
+                    break;
+                }
+            } else {
+                var wbuf: [1024]u8 = undefined;
+                var writer = file.writer(io, &wbuf);
+                var fw = &writer.interface;
+                try writer.seekTo(try file.length(io));
+                try fw.print("{d} {s} {s}\n", .{list.items.len+1, hash, pathbuf[0..pathlen]});
+                try fw.flush();
+                testPrint("Added song: {s}\n", .{path});
+                try Changes.addSong(io, list.items.len+1);
+            }
+        }
+        fn hashFile(io: Io, file: Io.File) ![32]u8 {
+            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer gpa.deinit();
+
+            var rbuf: [1024]u8 = undefined;
+            var reader = file.reader(io, &rbuf);
+            var fr = &reader.interface;
+            const data = try fr.allocRemaining(gpa.allocator(), .unlimited);
+
+            var h = std.crypto.hash.Blake3.init(.{});
+            var result: [32]u8 = undefined;
+
+            h.update(data);
+
+            h.final(&result);
+            return result;
+        }
+        fn parseMusicTableFile(io: Io, alloc: std.mem.Allocator) !std.ArrayList(Entry) {
+            var file = try getMusicTableFile(io);
+            defer file.close(io);
+
+            var rbuf: [1024]u8 = undefined;
+            var reader = file.reader(io, &rbuf);
+            var fr = &reader.interface;
+            const data = try fr.allocRemaining(alloc, .unlimited);
+
+            var list = try std.ArrayList(Entry).initCapacity(alloc, 4);
+
+            var i: usize = 0;
+            var begin: usize = 0;
+            var end: usize = 0;
+            while (i < data.len) {
+                begin = i;
+                end = i;
+                while (i < data.len) {
+                    if (data[i] == ' ') {
+                        end = i;
+                        break;
+                    }
+                    i+=1;
+                }
+                const id = stringToNum(data[begin..end]);
+                begin = end+1;
+                end = begin+32;
+                //testPrint("hash begin {d}: end {d}\n", .{begin, end});
+                const hash = data[begin..end];
+                begin = end+1;
+                i = begin;
+                while (i < data.len) {
+                    if (data[i] == '\n') {
+                        end = i;
+                        i+=1;
+                        break;
+                    }
+                    i+=1;
+                }
+                //testPrint("name begin {d}: end {d}\n", .{begin, end});
+                const name = data[begin..end];
+                //testPrint("id: {d}\nhash: {s}\nname: {s}\n", .{id, hash, name});
+                try list.append(alloc, .{ .id = id, .hash = hash, .path = name });
+            }
+            return list;
+        }
+    };
+    const Changes = struct {
+        const Entry = struct {
+            path: []const u8,
+            action: Action,
+        };
+        const Action = enum(u8) {
+            ADD,
+            RENAME,
+            DELETE,
+        };
+        fn getChangesFile(io: Io) !Io.File {
+            return getOrCreateFile(io, "changes.txt");
+        }
+        fn addSong(io: Io, id: usize) !void {
+            var file = try getChangesFile(io);
+            defer file.close(io);
+
+            var wbuf: [1024]u8 = undefined;
+            var writer = file.writer(io, &wbuf);
+            var fw = &writer.interface;
+            try writer.seekTo(try file.length(io));
+
+            try fw.print("add id:{d}\n", .{id});
+            try fw.flush();
+        }
+        fn getChanges(io: Io, alloc: std.mem.Allocator) !std.ArrayList(Entry) {
+            var file = try getChangesFile(io);
+            defer file.close(io);
+
+            var list = try std.ArrayList(Entry).initCapacity(alloc, 4);
+            const table = try MusicTable.parseMusicTableFile(io, alloc);
+            // defer table.deinit(alloc);
+
+            var it = try fileToToken(io, file, alloc);
+            while (it.next()) |e| {
+                const split = std.mem.cutScalar(u8, e, ' ');
+                const split1 = std.mem.cutScalar(u8, e, ':');
+                if (eql(split.?.@"0", "add")) {
+                    try list.append(alloc, .{ .action = .ADD, .path = table.items[stringToNum(split1.?.@"1")-1].path });
+                } else if (eql(split.?.@"0", "rename")) {
+                    
+                }
+            }
+            return list;
+        }
+    };
+    
+    const testing = struct {
+
+    };
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -468,7 +816,7 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
             if (eql(args[0], "sync")) {
                 try Networks.Client.start(io);
             } else if (eql(args[0], "sync_new_key")) {
-                try FileManager.writeKey(io, try FileManager.generateNewKey(io));
+                try FileManager.KeyStuff.writeKey(io, try FileManager.KeyStuff.generateNewKey(io));
             }
         },
         2 => {
@@ -476,6 +824,7 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
                 if (args[1].len != 8) return error.KeyWrongLength;
                 var key: [8]u8 = undefined;
                 @memcpy(&key, args[1][0..8]);
+                try FileManager.KeyStuff.writeKey(io, key);
 
                 try Networks.Client.start(io);
             } else if (eql(args[0], "add")) {
@@ -515,4 +864,33 @@ fn cin(io: std.Io, buffer: []u8) []u8 {
 }
 fn eql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
+}
+pub fn stringToNum(bytes: []const u8) usize {
+    var result: usize = 0;
+    for (bytes) |c| switch (c) {
+        '0'...'9' => {
+            result = result * 10 + (c - '0');
+        },
+        else => {},
+    };
+    return result;
+}
+test "FileManaging" {
+    const io = std.testing.io;
+    //const alloc = std.testing.allocator;
+    var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer gpa.deinit();
+    //try FileManager.testing.reset(io);
+
+    try FileManager.MusicPath.addPath(io, Io.Dir.cwd(),"music/album");
+    try FileManager.MusicPath.addPath(io, Io.Dir.cwd(), "music/c.mp3");
+    const list = try FileManager.Changes.getChanges(io, gpa.allocator());
+    for (list.items) |e| {
+        testPrint("{any}: {s}\n", .{e.action, e.path});
+    }
+
+    //try FileManager.MusicPath.deletePath(io, "music/album");
+
+    // try FileManager.testing.readMusicFoldersCache(io);
+    // try FileManager.testing.readMusicIds(io);
 }
