@@ -9,19 +9,25 @@ const Io = std.Io;
 
 //1st byte will be a code
 
+// TODO: send a message to clients if sucsessfully relaying
+// TODO: fix the resolve mesage issue
+
 var serverState: Networks.ServerState = .{};
+const RELAY_TIMEOUT = 60;
+const SERVER_TIMOUT = 20;
 
 pub const Networks = struct {
     const ClientConnection = struct {
         public_ip: std.Io.net.IpAddress = undefined,
         local_ip: ?std.Io.net.IpAddress = null,
+        timestamp: Io.Timestamp,
         key: [8]u8 = undefined,
 
-        pub fn init(buffer: [14]u8, public_ip: std.Io.net.IpAddress) ClientConnection {
+        pub fn init(buffer: [14]u8, public_ip: std.Io.net.IpAddress, timestamp: Io.Timestamp) ClientConnection {
             const local_ip = getLocalIp(buffer[0..6]);
             const key = buffer[6..14];
 
-            return .{ .public_ip = public_ip, .local_ip = local_ip, .key = key.* };
+            return .{ .public_ip = public_ip, .local_ip = local_ip, .key = key.*, .timestamp = timestamp };
         }
         fn getLocalIp(bytes: []const u8) std.Io.net.IpAddress {
             var port: u16 = 0;
@@ -42,6 +48,8 @@ pub const Networks = struct {
         NONE = 0x7,
         FILE_HEAD = 0x8,
         FILE_CONTENT = 0x9,
+        TERMINATE = 0xA,
+        DATA = 0xB,
         
 
         pub fn getCode(byte: u8) ClientCode {
@@ -55,6 +63,8 @@ pub const Networks = struct {
                 0x6 => return ClientCode.RELAY,
                 0x8 => return ClientCode.FILE_HEAD,
                 0x9 => return ClientCode.FILE_CONTENT,
+                0xA => return ClientCode.TERMINATE,
+                0xB => return ClientCode.DATA,
                 else => return ClientCode.NONE,
             }
         }
@@ -67,12 +77,15 @@ pub const Networks = struct {
                 .P2P => return .{0x04},
                 .ACK => return .{0x05},
                 .RELAY => return .{0x06},
+                .TERMINATE => return .{0x0A},
+                .DATA => return .{0x0B},
                 else => unreachable,
             }
         }
     };
     const ServerState = struct {
         clients: [16]?ClientConnection = [_]?ClientConnection{null} ** 16,
+        temp: Temp = .{},
         server_socket: net.Socket = undefined,
         clients_size: u8 = 0,
         lock: std.Io.Mutex = .init,
@@ -114,6 +127,21 @@ pub const Networks = struct {
                 }
             }
         }
+        fn cleanUp(self: *ServerState, io: Io) !void {
+            try self.lock.lock(io);
+            defer self.lock.unlock(io);
+            for (&self.clients) |*client| {
+                if (client.* == null) continue;
+                const duration = client.*.?.timestamp.untilNow(io, .awake);
+                if (duration.toSeconds() >= SERVER_TIMOUT) {
+                    try self.server_socket.send(io, &client.*.?.public_ip, &ClientCode.getByte(.TERMINATE));
+                    client.* = null;
+                    self.clients_size -= 1;
+                    std.debug.print("Client size: {d}\n", .{serverState.clients_size});
+                }
+            }
+            
+        }
         pub fn initialResponse(self: *ServerState, io: Io, ip: net.IpAddress, other: ClientConnection) !void {
             var response: [13]u8 = undefined;
             response[0] = @intFromEnum(ClientCode.INITIAL);
@@ -143,91 +171,95 @@ pub const Networks = struct {
     // TODO: for TCP
     const ClientState = struct {};
     const Temp = struct {
-        var relayClients: [16]?RelayClient = [_]?RelayClient{null} ** 16;
-        var size: usize = 0;
+        relayClients: [16]?RelayClient = [_]?RelayClient{null} ** 16,
+        lock: std.Io.Mutex = .init,
+        size: usize = 0,
 
         const RelayClient = struct {
             from_ip: net.IpAddress,
+            timestamp: Io.Timestamp,
             key: [8]u8,
 
-            fn init(ip: net.IpAddress, key: [8]u8) RelayClient {
+            fn init(ip: net.IpAddress, key: [8]u8, timestamp: Io.Timestamp) RelayClient {
                 return .{
                     .from_ip = ip,
+                    .timestamp = timestamp,
                     .key = key,
                 };
             }
         };
-        fn add(new: RelayClient) !void {
+        fn add(self: *Temp, io: Io, new: RelayClient) !void {
+            try self.lock.lock(io);
+            defer self.lock.unlock(io);
             //check if exists
-            for (&relayClients) |*client| {
+            for (&self.relayClients) |*client| {
                 if (client.* != null) {
                     //std.debug.print("already tracked relay client\n", .{});
                     if (client.*.?.from_ip.eql(&new.from_ip)) return;
                 }
             } 
-            for (&relayClients) |*client| {
+            for (&self.relayClients) |*client| {
                 if (client.* == null) {
                     //std.debug.print("added new relay client\n", .{});
                     client.* = new;
-                    size += 1;
+                    self.size += 1;
                     return;
                 }
             } else {
                 return error.TooManyClients;
             }
         }
-        fn remove(io: Io, ip: net.IpAddress) !void {
-            // TODO: change  this to a single for loop
-            // TODO: if only one connects and you try to remove size underflows
-            // for (&relayClients) |*client| {
-            //     if (client.* != null) {
-            //         if (client.*.?.from_ip.eql(&ip)) {
-            //             const key = client.*.?.key;
-            //             for (&relayClients) |*client1| {
-            //                 if (std.mem.eql(u8, &key, &client1.*.?.key)) {
-            //                     try serverState.server_socket.send(io, &client.*.?.from_ip, "EXIT");
-            //                     try serverState.server_socket.send(io, &client1.*.?.from_ip, "EXIT");
-            //                     client.* = null;
-            //                     client1.* = null;
-            //                     size -= 2;
-            //                     return;
-            //                 }
-            //             }
-            //         }
-            //     }
-            // }
+        fn remove(self: *Temp, io: Io, ip: net.IpAddress) !void {
+            try self.lock.lock(io);
+            defer self.lock.unlock(io);
             var from_client: RelayClient = undefined;
-            for (&relayClients) |*client| {
+            for (&self.relayClients) |*client| {
                 if (client.* != null) {
                     if (client.*.?.from_ip.eql(&ip)) {
                         from_client = client.*.?;
-                        try serverState.server_socket.send(io, &from_client.from_ip, "EXIT");
+                        try serverState.server_socket.send(io, &from_client.from_ip, &ClientCode.getByte(.TERMINATE));
                         client.* = null;
-                        size -= 1;
+                        self.size -= 1;
                         break;
                     }
                 }
             }
-            for (&relayClients) |*client| {
+            for (&self.relayClients) |*client| {
                 if (client.* != null) {
                     if (from_client.from_ip.eql(&client.*.?.from_ip)) continue;
                     if (std.mem.eql(u8, &from_client.key, &client.*.?.key)) {
-                        try serverState.server_socket.send(io, &client.*.?.from_ip, "EXIT");
+                        try serverState.server_socket.send(io, &client.*.?.from_ip, &ClientCode.getByte(.TERMINATE));
                         client.* = null;
-                        size -= 1;
+                        self.size -= 1;
                         break;
                     }
                 }
             }
 
         }
-        fn resolve(io: Io, ip: net.IpAddress, key: [8]u8, data: []u8) !void {
-            for (&relayClients) |*client| {
+        fn resolve(self: *Temp, io: Io, ip: net.IpAddress, key: [8]u8, data: []u8) !void {
+            try self.lock.lock(io);
+            defer self.lock.unlock(io);
+            for (&self.relayClients) |*client| {
                 if (client.* != null) {
                     if (!client.*.?.from_ip.eql(&ip) and std.mem.eql(u8, &client.*.?.key, &key)) {
                         std.debug.print("Sending data between relay clients\n", .{});
                         try serverState.server_socket.send(io, &client.*.?.from_ip, data);
                     }
+                }
+            }
+        }
+        fn cleanUpRelay(self: *Temp, io: Io) !void {
+            try self.lock.lock(io);
+            defer self.lock.unlock(io);
+            for (&self.relayClients) |*client| {
+                if (client.* == null) continue;
+                const duration = client.*.?.timestamp.untilNow(io, .awake);
+                if (duration.toSeconds() >= RELAY_TIMEOUT) {
+                    try serverState.server_socket.send(io, &client.*.?.from_ip, &ClientCode.getByte(.TERMINATE));
+                    client.* = null;
+                    self.size -= 1;
+                    std.debug.print("Client size: {d}\n", .{serverState.clients_size});
                 }
             }
         }
@@ -247,7 +279,7 @@ pub const Networks = struct {
                             print(io, "Invalid Client Message: {s}\n", .{message.data});
                             continue;
                         }
-                        const connection = Networks.ClientConnection.init(message.data[1..15].*, message.from);
+                        const connection = Networks.ClientConnection.init(message.data[1..15].*, message.from, Io.Timestamp.now(io, .awake));
                         const p = connection.public_ip.ip4;
                         const l = connection.local_ip.?.ip4;
                         print(io, "Public: {d}.{d}.{d}.{d}:{d}, Local: {d}.{d}.{d}.{d}:{d} Connected with key: {s}\n", .{ p.bytes[0], p.bytes[1], p.bytes[2], p.bytes[3], p.port, l.bytes[0], l.bytes[1], l.bytes[2], l.bytes[3], l.port, connection.key });
@@ -257,17 +289,17 @@ pub const Networks = struct {
                         print(io, "Client Size {d}\n", .{serverState.clients_size});
                     },
                     .RELAY => {
-                        if (message.data.len == 14) {
-                            if (std.mem.eql(u8, message.data[10..14], "EXIT")) {
-                                try Temp.remove(io, message.from);
-                                print(io, "Relay Size {d}\n", .{Temp.size});
+                        if (message.data.len == 10) {
+                            if (ClientCode.getCode(message.data[9]) == .TERMINATE) {
+                                try serverState.temp.remove(io, message.from);
+                                print(io, "Relay Size {d}\n", .{serverState.temp.size});
                                 continue;
                             }
                         }
                         
-                        try Temp.add(.init(message.from, message.data[1..9].*));
-                        print(io, "Relay Size {d}\n", .{Temp.size});
-                        try Temp.resolve(io, message.from, message.data[1..9].*, message.data[9..]);
+                        try serverState.temp.add(io, .init(message.from, message.data[1..9].*, Io.Timestamp.now(io, .awake)));
+                        print(io, "Relay Size {d}\n", .{serverState.temp.size});
+                        try serverState.temp.resolve(io, message.from, message.data[1..9].*, message.data[9..]);
                     },
                     else => {
                         print(io, "Code not implemented\n", .{});
@@ -278,9 +310,9 @@ pub const Networks = struct {
         fn workerThread(io: Io) !void {
             std.debug.print("size: {d}\n", .{serverState.clients_size});
             while (true) {
-                //print(io, "size: {d}", .{serverState.clients_size});
-
-                try io.sleep(.fromMilliseconds(100), .awake);
+                try io.sleep(.fromSeconds(1), .awake);
+                try serverState.cleanUp(io);
+                try serverState.temp.cleanUpRelay(io);
             }
         }
         fn bindSocket(io: Io) !std.Io.net.Socket {
@@ -292,6 +324,8 @@ pub const Networks = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
+    // _ = init;
+    // std.debug.print("ipadess {d}\nclient {d}\ntimestamp {d}\n", .{@sizeOf(Io.net.IpAddress), @sizeOf(Networks.Temp.RelayClient), @sizeOf(Io.Timestamp)});
     const thread = try std.Thread.spawn(.{}, Networks.Server.workerThread, .{init.io});
     try Networks.Server.listen(init.io);
     thread.join();
