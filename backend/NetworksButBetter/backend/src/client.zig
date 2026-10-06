@@ -285,7 +285,7 @@ const Networks = struct {
                     switch (e.action) {
                         .ADD => {
                             testPrint("{any}: {s}\n", .{e.action, e.path});
-                            try sendFile(io, e.path);
+                            try sendFile(io, e);
                         },
                         else => {
                             testPrint("Not implemented {any}\n", .{e.action});
@@ -296,7 +296,8 @@ const Networks = struct {
                 // const exit = "EXIT";
                 // try send(io, exit);
             }
-            fn sendFile(io: Io, path: []const u8) !void {
+            fn sendFile(io: Io, entry: FileManager.Changes.Entry) !void {
+                const path = entry.path;
                 var file = try Io.Dir.openFileAbsolute(io, path, .{});
                 defer file.close(io);
                 const basename = std.fs.path.basename(path);
@@ -748,6 +749,7 @@ const FileManager = struct {
     const Changes = struct {
         const Entry = struct {
             path: []const u8,
+            id: usize,
             action: Action,
         };
         const Action = enum(u8) {
@@ -783,7 +785,8 @@ const FileManager = struct {
                 const split = std.mem.cutScalar(u8, e, ' ');
                 const split1 = std.mem.cutScalar(u8, e, ':');
                 if (eql(split.?.@"0", "add")) {
-                    try list.append(alloc, .{ .action = .ADD, .path = table.items[stringToNum(split1.?.@"1")-1].path });
+                    const id = stringToNum(split1.?.@"1");
+                    try list.append(alloc, .{ .action = .ADD, .path = table.items[id-1].path, .id = id });
                 } else if (eql(split.?.@"0", "rename")) {
                     
                 }
@@ -805,6 +808,7 @@ pub fn main(init: std.process.Init) !void {
     try start(init.io, args[1..]);
 }
 pub fn start(io: Io, args: []const [:0]const u8) !void {
+    Networks.Client.acknowledged = false;
     clientState = .init(io);
     defer clientState.deinit(io);
 
