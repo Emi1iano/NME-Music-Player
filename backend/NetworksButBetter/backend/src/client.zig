@@ -13,9 +13,9 @@ const Io = std.Io;
 // attempt to connect to reciever ip
 // if fails fall back to relaying
 var clientState: Networks.ClientState = undefined;
-const TESTING_RELAY: bool = true;
+const TESTING_RELAY: bool = false;
 const TESTING: bool = true;
-const CHAT_MODE: bool = false;
+const CHAT_MODE: bool = true;
 
 const Networks = struct {
     const ClientState = struct {
@@ -341,7 +341,7 @@ const Networks = struct {
                         while (true) {
                             const d = buufferedr.take(1024-header.len) catch break;
                             @memcpy(senddata[header.len..], d);
-                            try clientState.sendResolved(io, senddata[0..d.len+1]);
+                            try clientState.sendResolved(io, senddata[0..header.len+d.len+1]);
                         }
 
                         @memcpy(senddata[header.len..header.len+4], "STOP");
