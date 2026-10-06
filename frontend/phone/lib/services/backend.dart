@@ -369,29 +369,21 @@ class Backend extends ChangeNotifier {
   }
 
   /// The UDP port the backend's sync is using. It starts at 32145 and counts
-  /// up if that's taken. Apps can't read /proc/net/udp on Android 10+, so ask
-  /// the system about each of this app's open sockets instead (getsockname).
+  /// up if that's taken. Apps can't read /proc/net/udp on Android 10+, and
+  /// listing /proc/self/fd fails now and then (the backend opens and closes
+  /// sockets while it runs), so simply ask the system about each possible
+  /// file descriptor number with getsockname(); non-sockets just fail.
   int? _findBackendPort() {
     try {
-      final libc = DynamicLibrary.process();
-      final getsockname = libc.lookupFunction<Int32 Function(Int32, Pointer<Uint8>, Pointer<Uint32>),
+      final getsockname = DynamicLibrary.process().lookupFunction<
+          Int32 Function(Int32, Pointer<Uint8>, Pointer<Uint32>),
           int Function(int, Pointer<Uint8>, Pointer<Uint32>)>('getsockname');
       final addr = malloc<Uint8>(128);
       final len = malloc<Uint32>(1);
       try {
-        // Only file descriptors that are sockets ("socket:[...]") are checked.
-        for (final entry in Directory('/proc/self/fd').listSync()) {
-          final fd = int.tryParse(p.basename(entry.path));
-          if (fd == null) continue;
-          String target;
-          try {
-            target = Link(entry.path).targetSync();
-          } catch (_) {
-            continue;
-          }
-          if (!target.startsWith('socket:')) continue;
+        for (var fd = 3; fd < 1024; fd++) {
           len.value = 128;
-          if (getsockname(fd, addr, len) != 0) continue;
+          if (getsockname(fd, addr, len) != 0) continue; // not an open socket
           // sockaddr_in / sockaddr_in6: 2-byte family, then the port (big-endian).
           final family = addr[0] | (addr[1] << 8);
           if (family != 2 && family != 10) continue; // AF_INET, AF_INET6

@@ -14,7 +14,7 @@ int32_t clientAPI(const char* command); // 0 = ok, -1 = error
 | `armeabi-v7a/` | older 32-bit phones |
 | `x86_64/` | the Android emulator |
 
-**Built from:** `backend/NetworksButBetter/backend/src` in this branch (last source change `1b35d86`) on 2026-10-06 with Zig 0.16.0,
+**Built from:** `backend/NetworksButBetter/backend/src` in this branch (last source change `ce5506e`) on 2026-10-06 with Zig 0.16.0,
 
 ## Updating after backend changes
 
