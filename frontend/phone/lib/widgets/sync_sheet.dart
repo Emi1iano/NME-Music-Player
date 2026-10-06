@@ -285,6 +285,11 @@ class _StatusRow extends StatelessWidget {
           const Icon(Icons.stop_circle_outlined, color: AppColors.textSecondary),
           'Sync cancelled'
         ),
+      SyncState.noPartner => (
+          const Icon(Icons.person_search_rounded, color: Colors.amber),
+          'No device with this key found. The server waits 20 seconds, so start '
+              'sync on both devices at about the same time.'
+        ),
       SyncState.finished => (
           const Icon(Icons.check_circle_rounded, color: Colors.greenAccent),
           'Sync finished'

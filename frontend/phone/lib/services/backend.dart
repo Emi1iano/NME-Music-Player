@@ -23,6 +23,7 @@ enum SyncState {
   paired,      // connected to the other device (directly or via the server)
   cancelling,  // Cancel pressed: asking the backend to stop
   cancelled,   // stopped by Cancel
+  noPartner,   // the server found no device with this key in time (it waits 20 s)
   finished,    // the backend's sync returned 0
   failed,      // the backend's sync returned an error
 }
@@ -233,9 +234,14 @@ class Backend extends ChangeNotifier {
       AppLog.instance.info('Backend < $command = $code');
       final wasCancelling = syncState == SyncState.cancelling;
       _stopCancelling();
+      // The server sends "Disconnected" (TERMINATE) to a device that waited
+      // 20 s without another device using the same key.
+      final nobodyCame = syncPeer == null && !_punchingDone && syncMode == 'disconnected';
       syncState = wasCancelling
           ? SyncState.cancelled
-          : (code == 0 ? SyncState.finished : SyncState.failed);
+          : nobodyCame
+              ? SyncState.noPartner
+              : (code == 0 ? SyncState.finished : SyncState.failed);
       if (wasCancelling) AppLog.instance.info('Backend: sync cancelled');
       notifyListeners();
     });
@@ -286,6 +292,7 @@ class Backend extends ChangeNotifier {
           syncMode = 'through the server';
         }
       } else if (line.startsWith('Disconnected')) {
+        // The other device or the server (after 60 s of relaying) hung up.
         syncMode = 'disconnected';
       }
     }
@@ -295,27 +302,22 @@ class Backend extends ChangeNotifier {
   // --------------------------------------------------------- cancelling sync
 
   bool _punchingDone = false;        // the backend finished its connection attempts
-  RawDatagramSocket? _cancelSocket;  // our side of the local "pretend device"
+  RawDatagramSocket? _cancelSocket;  // used to send the backend its stop message
   Timer? _cancelTimer;
   DateTime? _cancelStarted;
 
-  // The backend's message codes (backend/NetworksButBetter/backend/src/server.zig).
-  static const _codeInitial = 0x00;
-  static const _codeP2P = 0x04;
-  static const _codeAck = 0x05;
+  // The backend's "disconnect" message code (ClientCode.TERMINATE in
+  // backend/NetworksButBetter/backend/src/server.zig).
+  static const _codeTerminate = 0x0A;
 
   /// Stops a running sync without closing the app.
   ///
-  /// The backend has no "stop" call, but its sync ends cleanly when it reads
-  /// "EXIT" as typed input and then receives an "EXIT" packet (its normal
-  /// disconnect). The app can do both:
-  ///  - typed input: we own its stdin pipe, so we "type" EXIT into it;
-  ///  - packets: its UDP socket listens on this phone, so we can send it
-  ///    packets on 127.0.0.1.
-  /// If no other device has been found yet, the backend is still waiting for
-  /// the server, so first we send it the server's "here's your partner"
-  /// message pointing at ourselves, and answer its connection attempt, so it
-  /// reaches the point where it reads input. Then EXIT ends it.
+  /// The backend's sync ends when its listener receives a TERMINATE message
+  /// (the same one the server or the other device sends to disconnect). Its
+  /// UDP socket listens on this phone, so we send it TERMINATE on 127.0.0.1.
+  /// That works whether it's still waiting for the server or connected.
+  /// If connected, we first "type" EXIT into its input so it tells the other
+  /// device it's leaving.
   Future<void> cancelSync() async {
     if (!isSyncing || syncState == SyncState.cancelling) return;
     final before = syncState;
@@ -336,33 +338,18 @@ class Backend extends ChangeNotifier {
     _cancelSocket = socket;
     final backend = InternetAddress.loopbackIPv4;
 
-    // Answer the backend's connection attempts ("P2P") with an "ACK", so it
-    // finishes punching right away instead of after 30 tries.
-    socket.listen((event) {
-      if (event != RawSocketEvent.read) return;
-      final dg = socket.receive();
-      if (dg == null || dg.data.isEmpty) return;
-      if (dg.data[0] == _codeP2P) {
-        socket.send([_codeAck, ...'PUBLIC IP'.codeUnits], backend, backendPort);
-      }
-    });
+    // Connected: EXIT makes the backend send TERMINATE to the other device.
+    // (Only when connected; otherwise the EXIT would sit in its input and end
+    // the NEXT sync immediately.)
+    if (before == SyncState.paired) _typeToBackend('EXIT\n');
 
-    // Still waiting for the server: hand it a partner (us).
-    if (syncPeer == null && !_punchingDone) {
-      final us = [127, 0, 0, 1, socket.port >> 8, socket.port & 0xff];
-      socket.send([_codeInitial, ...us, ...us], backend, backendPort);
-    }
-
-    // "Type" EXIT: once punching is done the backend reads it, tells the other
-    // side it's leaving, and stops reading input.
-    _typeToBackend('EXIT\n');
-
-    // Then its listener needs an "EXIT" packet to stop. Only send it after
-    // punching is done (if the listener stopped earlier, punching would wait
-    // forever). Keep nudging until the sync returns, for up to 15 seconds.
+    // Stop its listener; repeat every half second until sync returns (UDP
+    // messages can get lost), for up to 15 seconds.
+    void stop() => socket.send([_codeTerminate], backend, backendPort);
+    stop();
     _cancelTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
       _readSyncOutput();
-      if (_punchingDone) socket.send('EXIT'.codeUnits, backend, backendPort);
+      stop();
       if (DateTime.now().difference(_cancelStarted!) > const Duration(seconds: 15)) {
         // Still running: show it as running again so the user can retry.
         AppLog.instance.warning('Backend: sync did not stop yet; try Cancel again '
