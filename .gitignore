@@ -7,3 +7,14 @@ backend/NetworksButBetter/backend/src/.zig-cache
 backend/NetworksButBetter/backend/src/zig-out
 backend/NetworksButBetter/backend/src/app
 backend/NetworksButBetter/backend/src/testing
+
+# Flutter (frontend/windows)
+frontend/windows/build/
+frontend/windows/.dart_tool/
+frontend/windows/windows/flutter/ephemeral/
+frontend/windows/.flutter-plugins
+frontend/windows/.flutter-plugins-dependencies
+frontend/windows/*.iml
+frontend/windows/.idea/**/windows/flutter/generated_plugin_registrant.*
+**/windows/flutter/generated_plugins.cmake
+**/windows/flutter/ephemeral/
