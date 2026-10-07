@@ -243,7 +243,7 @@ pub const Networks = struct {
             for (&self.relayClients) |*client| {
                 if (client.* != null) {
                     if (!client.*.?.from_ip.eql(&ip) and std.mem.eql(u8, &client.*.?.key, &key)) {
-                        std.debug.print("Sending data between relay clients\n", .{});
+                        //std.debug.print("Sending data between relay clients\n", .{});
                         try serverState.server_socket.send(io, &client.*.?.from_ip, data);
                     }
                 }
@@ -271,7 +271,7 @@ pub const Networks = struct {
 
             var messageBuf: [1024]u8 = undefined;
             while (serverState.server_socket.receive(io, &messageBuf)) |message| {
-                print(io, "Client Size {d}\n", .{serverState.clients_size});
+                //print(io, "Client Size {d}\n", .{serverState.clients_size});
                 const code = ClientCode.getCode(message.data[0]);
                 switch (code) {
                     .INITIAL => {
@@ -289,6 +289,9 @@ pub const Networks = struct {
                         print(io, "Client Size {d}\n", .{serverState.clients_size});
                     },
                     .RELAY => {
+                        if (message.data.len < 100) {
+                            print(io, "RELAY: {s}\n", .{message.data[1..]});
+                        }
                         if (message.data.len == 10) {
                             if (ClientCode.getCode(message.data[9]) == .TERMINATE) {
                                 try serverState.temp.remove(io, message.from);
@@ -298,7 +301,7 @@ pub const Networks = struct {
                         }
                         
                         try serverState.temp.add(io, .init(message.from, message.data[1..9].*, Io.Timestamp.now(io, .awake)));
-                        print(io, "Relay Size {d}\n", .{serverState.temp.size});
+                        //print(io, "Relay Size {d}\n", .{serverState.temp.size});
                         try serverState.temp.resolve(io, message.from, message.data[1..9].*, message.data[9..]);
                     },
                     else => {

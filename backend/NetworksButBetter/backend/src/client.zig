@@ -135,6 +135,8 @@ const Networks = struct {
             var initial: [7]u8 = undefined;
             @memcpy(initial[0..], "RESOLVE");
             try send(io, initial[0..]);
+            //TODO: do a proper handshake
+            try io.sleep(.fromMilliseconds(100), .awake);
         }
         fn clientStart(io: Io) !void {
             if (clientState.should_disconnect) return;
@@ -249,11 +251,15 @@ const Networks = struct {
                         acknowledged = true;
                     },
                     .DATA => {
+                        // if (message.data.len < 100) {
+                        //     testPrint("DATA: {s}\n", .{message.data[1..]});
+                        // }
                         if (eql(message.data[1..], "FILE")) action = .ADD
                         else if (eql(message.data[1..], "STOP")) switch (action) {
                             .ADD => {
                                 try Syncing.recieveFile(io, &writer.writer);
                                 _ = writer.writer.consumeAll();
+                                action = undefined;
                             },
                             else => {
                                 testPrint("Not implemented: {any}\n", .{action});
@@ -286,6 +292,7 @@ const Networks = struct {
                         .ADD => {
                             testPrint("{any}: {s}\n", .{e.action, e.path});
                             try sendFile(io, e);
+                            try io.sleep(.fromMicroseconds(500), .awake);
                         },
                         else => {
                             testPrint("Not implemented {any}\n", .{e.action});
@@ -298,6 +305,7 @@ const Networks = struct {
             }
             fn sendFile(io: Io, entry: FileManager.Changes.Entry) !void {
                 const path = entry.path;
+                const id = entry.id;
                 var file = try Io.Dir.openFileAbsolute(io, path, .{});
                 defer file.close(io);
                 const basename = std.fs.path.basename(path);
@@ -317,14 +325,18 @@ const Networks = struct {
                         senddata[0] = ClientCode.getByte(.DATA)[0];
 
                         try clientState.sendResolved(io, ClientCode.getByte(.DATA) ++ "FILE");
-                        const header = try std.fmt.bufPrint(senddata[1..], "{d:0>8}{s}{d:0>8}", .{basename.len, basename, data.len});
+                        const header = try std.fmt.bufPrint(senddata[1..], "{d:0>8}{d:0>8}{s}{d:0>8}", .{id, basename.len, basename, data.len});
                         testPrint("file header: {s}\n", .{header});
                         try clientState.sendResolved(io, senddata[0..header.len+1]);
 
+                        var sent: usize = 0;
                         while (true) {
-                            const d = buufferedr.take(1023) catch break;
-                            @memcpy(senddata[1..], d);
+                            const d = buufferedr.take(1023) catch buufferedr.buffered();
+                            @memcpy(senddata[1..d.len+1], d);
                             try clientState.sendResolved(io, senddata[0..d.len+1]);
+                            sent += 1;
+                            if (sent % 16 == 0) try io.sleep(.fromMilliseconds(1), .awake);
+                            if (d.len != 1023) break;
                         }
                         try clientState.sendResolved(io, ClientCode.getByte(.DATA) ++ "STOP");
                     },
@@ -335,14 +347,18 @@ const Networks = struct {
                         @memcpy(senddata[header.len..header.len+4], "FILE");
                         try clientState.sendResolved(io, senddata[0..header.len+4]);
 
-                        const fheader = try std.fmt.bufPrint(senddata[header.len..], "{d:0>8}{s}{d:0>8}", .{basename.len, basename, data.len});
+                        const fheader = try std.fmt.bufPrint(senddata[header.len..], "{d:0>8}{d:0>8}{s}{d:0>8}", .{id, basename.len, basename, data.len});
                         testPrint("file header: {s}\n", .{fheader});
                         try clientState.sendResolved(io, senddata[0..header.len+fheader.len]);
 
+                        var sent: usize = 0;
                         while (true) {
-                            const d = buufferedr.take(1024-header.len) catch break;
-                            @memcpy(senddata[header.len..], d);
-                            try clientState.sendResolved(io, senddata[0..header.len+d.len+1]);
+                            const d = buufferedr.take(1024-header.len) catch buufferedr.buffered();
+                            @memcpy(senddata[header.len..header.len+d.len], d);
+                            try clientState.sendResolved(io, senddata[0..header.len+d.len]);
+                            sent += 1;
+                            if (sent % 16 == 0) try io.sleep(.fromMilliseconds(1), .awake);
+                            if (d.len != 1024-header.len) break;
                         }
 
                         @memcpy(senddata[header.len..header.len+4], "STOP");
@@ -352,19 +368,19 @@ const Networks = struct {
 
             }
             fn recieveFile(io: Io, writer: *Io.Writer) !void {
-                testPrint("recieved header: {s}\n", .{writer.buffer[0..20]});
-                const name_len = stringToNum(writer.buffer[0..8]);
-                const name = writer.buffer[8..8+name_len];
-                const content_len = stringToNum(writer.buffer[8+name_len..16+name_len]);
-                const content = writer.buffer[16+name_len..16+name_len+content_len];
+                //TODO: use the id
+                const id = stringToNum(writer.buffered()[0..8]);
+                const name_len = stringToNum(writer.buffered()[8..16]);
+                const name = writer.buffered()[16..16+name_len];
+                const content_len = stringToNum(writer.buffered()[16+name_len..24+name_len]);
+                const content = writer.buffered()[24+name_len..24+name_len+content_len];
 
-                testPrint("adding file {s} len: {d}\n", .{name, content_len});
+                testPrint("adding file {s} with id: {d} len: {d}\n", .{name, id, content_len});
 
                 var dir = try FileManager.getMusicDir(io);
                 defer dir.close(io);
 
                 var file = try dir.createFile(io, name, .{ .read = true });
-                defer file.close(io);
 
                 var wbuf: [1024*4]u8 = undefined;
                 var fwriter = file.writer(io, &wbuf);
@@ -372,6 +388,9 @@ const Networks = struct {
 
                 try fw.writeAll(content);
                 try fw.flush();
+
+                file.close(io);
+                _ = try FileManager.MusicTable.addEntry(io, dir, name);
             }
         };
         const LocalIp = struct {
@@ -616,7 +635,8 @@ const FileManager = struct {
             const basename = std.fs.path.basename(path);
             for (1..basename.len) |i| {
                 if (basename[basename.len-i] == '.') {
-                    try MusicTable.addEntry(io, cwd, path);
+                    const num = try MusicTable.addEntry(io, cwd, path);
+                    try Changes.addSong(io, num);
                     return;
                 }
             }
@@ -632,7 +652,8 @@ const FileManager = struct {
                 if (entry == null) break;
                 switch (entry.?.kind) {
                     .file => {
-                        try MusicTable.addEntry(io, dir, entry.?.name);
+                        const num = try MusicTable.addEntry(io, dir, entry.?.name);
+                        try Changes.addSong(io, num);
                     },
                     .directory => {
                         try addFolder(io, dir, entry.?.name);
@@ -651,7 +672,7 @@ const FileManager = struct {
         fn getMusicTableFile(io: Io) !Io.File {
             return getOrCreateFile(io, "musicTable.txt");
         }
-        fn addEntry(io: Io, dir: Io.Dir, path: []const u8) !void {
+        fn addEntry(io: Io, dir: Io.Dir, path: []const u8) !usize {
             var file = try getMusicTableFile(io);
             defer file.close(io);
             const song = try dir.openFile(io, path, .{});
@@ -669,7 +690,7 @@ const FileManager = struct {
             for (list.items) |e| {
                 if (eql(&hash, e.hash)) {
                     testPrint("Song {s} already included\n", .{path});
-                    break;
+                    return 0;
                 }
             } else {
                 var wbuf: [1024]u8 = undefined;
@@ -679,7 +700,8 @@ const FileManager = struct {
                 try fw.print("{d} {s} {s}\n", .{list.items.len+1, hash, pathbuf[0..pathlen]});
                 try fw.flush();
                 testPrint("Added song: {s}\n", .{path});
-                try Changes.addSong(io, list.items.len+1);
+                return list.items.len+1;
+               // try Changes.addSong(io, list.items.len+1);
             }
         }
         fn hashFile(io: Io, file: Io.File) ![32]u8 {
