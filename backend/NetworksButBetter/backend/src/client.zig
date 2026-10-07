@@ -15,7 +15,7 @@ const Io = std.Io;
 var clientState: Networks.ClientState = undefined;
 const TESTING_RELAY: bool = false;
 const TESTING: bool = true;
-const CHAT_MODE: bool = true;
+const CHAT_MODE: bool = false;
 
 const Networks = struct {
     const ClientState = struct {
@@ -829,6 +829,7 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
                 var key: [8]u8 = undefined;
                 @memcpy(&key, args[1][0..8]);
                 try FileManager.KeyStuff.writeKey(io, key);
+                clientState.key = key;
 
                 try Networks.Client.start(io);
             } else if (eql(args[0], "add")) {
