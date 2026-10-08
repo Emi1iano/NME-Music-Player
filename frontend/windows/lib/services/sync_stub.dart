@@ -1,9 +1,18 @@
-// Web build: browsers can't load a native .dll.
-// Point these at your own backend (HTTP/WebSocket) that wraps the DLL.
+// Web build: browsers can't open raw UDP sockets or the local disk, so sync
+// isn't available here. Point these at an HTTP/WebSocket backend later.
 class MusicSync {
-  static const _msg = 'Web: native DLL unavailable - connect via backend';
-  static Future<String> add(String path) async => _msg;
-  static Future<String> rename(String path) async => _msg;
-  static Future<String> sync([String? key]) async => _msg;
-  static Future<String> syncNewKey() async => _msg;
+  static const _msg = 'Web: sync is only available in the Windows app';
+  static const supported = false;
+  static String defaultFolder() => '';
+  static Future<List<String>> scan(String folder) async => [];
+  static Future<void> deleteFile(String folder, String path) async {}
+  static Future<String?> readKey() async => null;
+  static Future<String> sync({
+    required String key,
+    required String folder,
+    required String server,
+    Set<String> skip = const {},
+    void Function(String)? onStatus,
+  }) async =>
+      _msg;
 }

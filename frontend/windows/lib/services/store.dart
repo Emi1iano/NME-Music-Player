@@ -7,11 +7,18 @@ import '../models/models.dart';
 import 'sync_api.dart';
 
 class Store extends ChangeNotifier {
+  static const defaultServer = '24.243.26.72:5252';
+
+  final library = <Song>[];
+  final deleted = <String>{}; // songs the user deleted; sync skips them until resync
   final counts = <String, int>{};
   final playlists = <String, List<String>>{};
   int totalSecs = 0;
   String? key;
   String status = 'Not connected';
+  String folder = '';
+  String server = defaultServer;
+  bool syncing = false;
   Song? playing;
   bool paused = false;
   Timer? _t;
@@ -25,16 +32,44 @@ class Store extends ChangeNotifier {
     if (pl != null) {
       (jsonDecode(pl) as Map).forEach((k, v) => playlists[k] = List<String>.from(v));
     }
+    deleted.addAll(_p!.getStringList('deleted') ?? const []);
     totalSecs = _p!.getInt('secs') ?? 0;
-    key = _p!.getString('key');
+    key = _p!.getString('key') ?? await MusicSync.readKey();
+    folder = _p!.getString('folder') ?? MusicSync.defaultFolder();
+    server = _p!.getString('server') ?? defaultServer;
+    await rescan();
+  }
+
+  /// Rebuilds the library from the music folder (demo songs on web).
+  Future<void> rescan() async {
+    List<String> paths;
+    if (MusicSync.supported) {
+      try {
+        paths = await MusicSync.scan(folder);
+      } catch (e) {
+        status = 'Can\'t read music folder: $e';
+        paths = [];
+      }
+      // A file that's on disk again (restored by resync) is no longer deleted.
+      deleted.removeAll(paths);
+    } else {
+      paths = [for (final s in demoLibrary) if (!deleted.contains(s.path)) s.path];
+    }
+    library
+      ..clear()
+      ..addAll(paths.map(Song.fromPath));
+    _save();
     notifyListeners();
   }
 
   void _save() {
     _p?.setString('counts', jsonEncode(counts));
     _p?.setString('playlists', jsonEncode(playlists));
+    _p?.setStringList('deleted', deleted.toList());
     _p?.setInt('secs', totalSecs);
     if (key != null) _p?.setString('key', key!);
+    _p?.setString('folder', folder);
+    _p?.setString('server', server);
   }
 
   // ---- stats
@@ -64,6 +99,32 @@ class Store extends ChangeNotifier {
   void togglePause() {
     paused = !paused;
     _save();
+    notifyListeners();
+  }
+
+  // ---- delete
+  /// Deletes the song's file from the music folder and removes it from the
+  /// library, playlists and stats. Sync won't download it again until resync.
+  Future<void> deleteSong(Song s) async {
+    library.remove(s);
+    deleted.add(s.path);
+    counts.remove(s.path);
+    for (final l in playlists.values) {
+      l.remove(s.path);
+    }
+    if (playing == s) {
+      _t?.cancel();
+      playing = null;
+      paused = false;
+    }
+    _save();
+    notifyListeners();
+    try {
+      await MusicSync.deleteFile(folder, s.path);
+      status = 'Deleted ${s.title}';
+    } catch (e) {
+      status = 'Couldn\'t delete ${s.title}: $e';
+    }
     notifyListeners();
   }
 
@@ -104,30 +165,57 @@ class Store extends ChangeNotifier {
     return List.generate(8, (_) => r.nextInt(10)).join();
   }
 
-  Future<void> newKey() async {
+  void newKey() {
     key = _newKey();
     _save();
-    status = await MusicSync.syncNewKey();
+    status = 'New key - enter it on your other device, then press Sync on both';
     notifyListeners();
   }
 
+  void setFolder(String f) {
+    folder = f.trim();
+    rescan();
+  }
+
+  void setServer(String s) {
+    server = s.trim();
+    _save();
+    notifyListeners();
+  }
+
+  /// Pairs with the other device using [typed] (or the saved key) and
+  /// downloads every song it has that this device doesn't.
+  /// Deleted songs are skipped; use [resync] to get them back.
   Future<void> connect(String typed) async {
+    if (syncing) return;
+    if (typed.isNotEmpty) key = typed;
+    key ??= _newKey();
+    _save();
+    syncing = true;
+    notifyListeners();
     try {
-      if (typed.isNotEmpty) {
-        key = typed;
-      } else {
-        key ??= _newKey();
-      }
-      _save();
-      status = await MusicSync.sync(key);
+      status = await MusicSync.sync(
+        key: key!,
+        folder: folder,
+        server: server,
+        skip: deleted,
+        onStatus: (m) {
+          status = m;
+          notifyListeners();
+        },
+      );
     } on ArgumentError catch (e) {
       status = e.message.toString();
     }
-    notifyListeners();
+    syncing = false;
+    await rescan();
   }
 
-  Future<void> addFile(Song s) async {
-    status = await MusicSync.add(s.path);
+  /// Syncs again, this time also downloading the deleted songs in [restore].
+  Future<void> resync(Set<String> restore) async {
+    deleted.removeAll(restore);
+    _save();
     notifyListeners();
+    await connect('');
   }
 }

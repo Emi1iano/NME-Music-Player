@@ -1,49 +1,66 @@
-import 'dart:ffi';
+import 'dart:async';
 import 'dart:io';
-import 'package:ffi/ffi.dart';
+import 'sync_engine.dart';
 
-typedef _Native = Int32 Function(Pointer<Utf8>);
-typedef _Dart = int Function(Pointer<Utf8>);
-
-/// Desktop (Windows) wrapper. Replace 'execute' with the DLL's real export name.
+/// Desktop wrapper around the UDP sync engine.
 class MusicSync {
-  static _Dart? _fn;
   static final _keyRe = RegExp(r'^[0-9]{8}$');
+  static const supported = true;
 
-  static _Dart? _load() {
-    if (_fn != null || !Platform.isWindows) return _fn;
-    try {
-      _fn = DynamicLibrary.open('musicsync.dll')
-          .lookupFunction<_Native, _Dart>('execute');
-    } catch (_) {}
-    return _fn;
+  static String defaultFolder() =>
+      '${Platform.environment['USERPROFILE'] ?? Directory.current.path}\\Music\\NME';
+
+  static Future<List<String>> scan(String folder) async {
+    await Directory(folder).create(recursive: true);
+    return scanFolder(folder);
   }
 
-  static String _path(String p) {
-    if (p.startsWith('/') || p.startsWith('\\') || p.contains(':') || p.contains('..')) {
-      throw ArgumentError('Path must be relative to the music folder.');
+  static Future<void> deleteFile(String folder, String path) async {
+    if (!isSafeRelPath(path)) throw ArgumentError('Path must be relative to the music folder.');
+    final f = File('$folder/$path');
+    if (await f.exists()) await f.delete();
+  }
+
+  /// Reads a saved key from key.txt, if one exists and is valid.
+  static Future<String?> readKey() async {
+    for (final p in ['testing/app/key.txt', 'app/key.txt']) {
+      final f = File(p);
+      if (await f.exists()) {
+        final k = (await f.readAsString()).trim();
+        if (_keyRe.hasMatch(k)) return k;
+      }
     }
-    return p;
+    return null;
   }
 
-  static Future<String> _run(String cmd) async {
-    final f = _load();
-    if (f == null) return 'musicsync.dll not loaded';
-    final ptr = cmd.toNativeUtf8();
-    try {
-      final rc = f(ptr);
-      return rc == 0 ? 'ok' : 'error $rc';
-    } finally {
-      malloc.free(ptr);
-    }
-  }
-
-  static Future<String> add(String path) => _run('add ${_path(path)}');
-  static Future<String> rename(String path) => _run('rename ${_path(path)}');
-  static Future<String> syncNewKey() => _run('sync_new_key');
-  static Future<String> sync([String? key]) {
-    if (key == null) return _run('sync');
+  /// Pairs with the other device through [server] ("host:port") and
+  /// exchanges songs. Songs in [skip] are not downloaded.
+  static Future<String> sync({
+    required String key,
+    required String folder,
+    required String server,
+    Set<String> skip = const {},
+    void Function(String)? onStatus,
+  }) async {
     if (!_keyRe.hasMatch(key)) throw ArgumentError('Key must be 8 digits (0-9).');
-    return _run('sync $key');
+    final i = server.lastIndexOf(':');
+    final port = i < 0 ? null : int.tryParse(server.substring(i + 1));
+    if (port == null) throw ArgumentError('Server must look like host:port.');
+    try {
+      final addrs = await InternetAddress.lookup(server.substring(0, i), type: InternetAddressType.IPv4);
+      await Directory(folder).create(recursive: true);
+      return await SyncSession(
+        folder: folder,
+        key: key,
+        server: addrs.first,
+        serverPort: port,
+        skip: skip,
+        onStatus: onStatus,
+      ).run();
+    } on TimeoutException catch (e) {
+      return 'Sync failed: ${e.message}';
+    } on Exception catch (e) {
+      return 'Sync failed: $e';
+    }
   }
 }

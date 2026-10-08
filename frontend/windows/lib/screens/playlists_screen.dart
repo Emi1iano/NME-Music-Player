@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../models/models.dart';
 import '../services/store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass.dart';
@@ -47,7 +46,7 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
               width: 360,
               height: 400,
               child: ListView(children: [
-                for (final song in library)
+                for (final song in widget.s.library)
                   CheckboxListTile(
                     value: widget.s.playlists[pl]?.contains(song.path) ?? false,
                     title: Text(song.title),
