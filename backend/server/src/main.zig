@@ -1,20 +1,16 @@
 const std = @import("std");
 const Io = std.Io;
 
-const PORT: u16 = 5252;
 const MAX_CONNECTIONS: usize = 16;
-// A client that hasn't been paired within this many seconds is dropped.
-const TIMEOUT_NS: i96 = 60 * std.time.ns_per_s;
-
-const Connection = struct {key: [8]u8 = undefined, ip: std.Io.net.IpAddress, timestamp: std.Io.Timestamp};
-// CLIENTS is only touched by the main thread; the worker thread only reads CLIENTS_SIZE.
+const Connection = struct {key: [8]u8 = undefined, ip: std.Io.net.IpAddress, local_ip: ?std.Io.net.IpAddress = null, timestamp: std.Io.Timestamp};
+//TODO: add a mutex to this
 var CLIENTS: [MAX_CONNECTIONS]?Connection = [_]?Connection{null} ** MAX_CONNECTIONS;
-var CLIENTS_SIZE = std.atomic.Value(usize).init(0);
+var CLIENTS_SIZE: usize = 0;
 const CONNECTIONS = struct {
     fn add(conn: Connection) !void {
         for (&CLIENTS) |*client| {
             if (client.* == null) continue;
-            // Same client retrying: refresh its key and timestamp instead of failing.
+            //if (client.?.ip.eql(&conn.ip)) return error.ClientAlreadyWaiting;
             if (client.*.?.ip.eql(&conn.ip)) {
                 client.* = conn;
                 return;
@@ -23,103 +19,133 @@ const CONNECTIONS = struct {
         for (&CLIENTS) |*client| {
             if (client.* == null) {
                 client.* = conn;
-                _ = CLIENTS_SIZE.fetchAdd(1, .monotonic);
+                CLIENTS_SIZE += 1;
                 return;
             }
         } else {
             return error.TooManyClients;
         }
     }
-    fn remove(i: usize) void {
-        if (CLIENTS[i] == null) return;
-        CLIENTS[i] = null;
-        _ = CLIENTS_SIZE.fetchSub(1, .monotonic);
+    fn cleanUp() !void {
+
     }
-    // Drops clients that have been waiting longer than TIMEOUT_NS.
-    fn cleanUp(now: std.Io.Timestamp) void {
-        for (0..CLIENTS.len) |i| {
-            const client = CLIENTS[i] orelse continue;
-            if (now.nanoseconds - client.timestamp.nanoseconds > TIMEOUT_NS) remove(i);
-        }
-    }
-    fn pairUp(io: Io, server_socket: *std.Io.net.Socket) void {
+    fn pairUp(io: Io, server_spcket: *std.Io.net.Socket) !void {
         for (0..CLIENTS.len) |x| {
             for (x+1..CLIENTS.len) |y| {
                 if (CLIENTS[x] == null or CLIENTS[y] == null) continue;
                 if (std.mem.eql(u8, &CLIENTS[x].?.key, &CLIENTS[y].?.key)) {
-                    const client1 = CLIENTS[x].?.ip;
-                    const client2 = CLIENTS[y].?.ip;
+                    var client1: std.Io.net.IpAddress = undefined;
+                    var client2: std.Io.net.IpAddress = undefined;
+                    // TODO: check port too
+                    if (std.mem.eql(u8, &CLIENTS[x].?.ip.ip4.bytes, &CLIENTS[y].?.ip.ip4.bytes)) {
+                        if (CLIENTS[x].?.local_ip == null or CLIENTS[y].?.local_ip == null) {
+                            return error.NoLocalIp;
+                        }
+                        client1 = CLIENTS[x].?.local_ip.?;
+                        client2 = CLIENTS[y].?.local_ip.?;
+                        //client1 = CLIENTS[x].?.ip;
+                        // client2 = CLIENTS[y].?.ip;
+                    } else {
+                        client1 = CLIENTS[x].?.ip;
+                        client2 = CLIENTS[y].?.ip;
+                    }
+                    //TODO: make this not needed
+                    var buffer: [6]u8 = undefined;
 
-                    // Free the slots first so a failed send can't leave them stuck.
-                    remove(x);
-                    remove(y);
+                    try print(io, "swamping {any} and {any}\n", .{client1, client2});
 
-                    var buffer1: [6]u8 = undefined;
-                    var buffer2: [6]u8 = undefined;
-                    server_socket.send(io, &client1, formatIp(client2, &buffer1)) catch |err|
-                        std.debug.print("send to client1 failed: {}\n", .{err});
-                    server_socket.send(io, &client2, formatIp(client1, &buffer2)) catch |err|
-                        std.debug.print("send to client2 failed: {}\n", .{err});
-                    break;
+                    try server_spcket.send(io, &client1, formatIp(client2, &buffer));
+                    
+                    // for (0..20) |_| {
+                    //     try server_spcket.send(io, &client1, "hello from server");
+                    //     try io.sleep(.fromMicroseconds(10), .awake);
+                    // }
+                    try server_spcket.send(io, &client2, formatIp(client1, &buffer));
+
+                    CLIENTS[x] = null;
+                    CLIENTS[y] = null;
+                    CLIENTS_SIZE -= 2; 
                 }
             }
-        }
+        } 
     }
 };
 // Wait for 2 clients to connect with the same password/key
 // Connect them to each other
+//TODO: if two clients on the same network fix that
+// maybe use a map to store clients with key
 pub fn main(init: std.process.Init) !void {
     const thread = try std.Thread.spawn(.{}, workerThread, .{init});
     try mainThread(init);
     thread.join();
 }
 fn mainThread(init: std.process.Init) !void {
-    const ip = try std.Io.net.IpAddress.parse("0.0.0.0", PORT);
+    const ip = try std.Io.net.IpAddress.parse("192.168.0.62", 5252);
     std.debug.print("Server Opened...\n", .{});
     var server_socket = try ip.bind(init.io, .{ .mode = .dgram });
     defer server_socket.close(init.io);
 
     var buffer: [1024]u8 = undefined;
     while (true) {
-        const message = server_socket.receive(init.io, &buffer) catch |err| {
-            std.debug.print("receive failed: {}\n", .{err});
-            continue;
-        };
-        if (message.data.len != 8) continue;
-        // Pairing replies are IPv4-only (4 bytes + port), so ignore IPv6 senders.
-        if (message.from != .ip4) continue;
-        if (!isDigits(message.data)) continue;
+        const message = try server_socket.receive(init.io, &buffer);
+        // for (0..20) |_| {
+        //     try server_socket.send(init.io, &message.from, "HELLO");
+        // }
+        
+        if (message.data.len == 14) {
+            const local_ip = bufToIp(message.data[0..6].*);
+            const b = message.from.ip4.bytes;
+            const key = message.data[6..14];
+            try print(init.io, "Public: {d}.{d}.{d}.{d}:{d}, Local: {d}.{d}.{d}.{d}:{d} Connected with key: {s}\n", 
+            .{b[0], b[1], b[2], b[3], message.from.getPort(), message.data[0], message.data[1], message.data[2], message.data[3], local_ip.getPort(), key});
 
-        const b = message.from.ip4.bytes;
-        std.debug.print("{d}.{d}.{d}.{d}:{d} Connected with key: {s}\n", .{b[0], b[1], b[2], b[3], message.from.getPort(), message.data});
+            var conn = Connection {.ip = message.from, .timestamp = std.Io.Timestamp.now(init.io, .awake)};
+            @memcpy(&conn.key, key);
 
-        const now = std.Io.Timestamp.now(init.io, .awake);
-        CONNECTIONS.cleanUp(now);
+            const aux: u32 = @bitCast(local_ip.ip4.bytes);
+            if (aux != 0) conn.local_ip = local_ip; 
 
-        var conn = Connection {.ip = message.from, .timestamp = now};
-        @memcpy(&conn.key, message.data[0..8]);
-        CONNECTIONS.add(conn) catch |err| {
-            std.debug.print("rejected client: {}\n", .{err});
-            continue;
-        };
-        CONNECTIONS.pairUp(init.io, &server_socket);
+            CONNECTIONS.add(conn) catch |err| switch (err) {
+                // error.ClientAlreadyWaiting => {
+                //     try print(init.io, "\x1b[1A{any}\x1b[1E\n", .{err});
+                //     continue;
+                // },
+                else => {},
+            };
+            try CONNECTIONS.pairUp(init.io, &server_socket);
+        }
     }
 }
 fn workerThread(init: std.process.Init) !void {
+    std.debug.print("size: {d}\n", .{CLIENTS_SIZE});
     while (true) {
-        std.debug.print("size: {d}\n", .{CLIENTS_SIZE.load(.monotonic)});
+        try print(init.io, "size: {d}", .{CLIENTS_SIZE});
 
-        try init.io.sleep(.fromSeconds(1), .awake);
+        try init.io.sleep(.fromMilliseconds(100), .awake);
     }
 }
-fn isDigits(data: []const u8) bool {
-    for (data) |c| if (c < '0' or c > '9') return false;
-    return true;
+var lock = std.Io.Mutex.init;
+fn print(io: Io, comptime fmt: []const u8, args: anytype) !void {
+    try lock.lock(io);
+    std.debug.print("\x1b[1A" ++ fmt ++ "\x1b[1E", args);
+    lock.unlock(io);
 }
-fn formatIp(ip: std.Io.net.IpAddress, buffer: *[6]u8) []u8 {
+fn formatIp(ip: std.Io.net.IpAddress, buffer: []u8) []u8 {
     @memcpy(buffer[0..4], &ip.ip4.bytes);
+    buffer[4] = 0x0; buffer[5] = 0x0;
+
     const port = ip.ip4.port;
-    buffer[4] = @truncate(port >> 8);
-    buffer[5] = @truncate(port);
+    buffer[4] |= @truncate(port >> 8);
+    buffer[5] |= @truncate(port);
+
+    //std.debug.print("{b:0>16} : {b:0>8}{b:0>8}\n", .{ip.ip4.port, buffer[4], buffer[5]});
     return buffer;
+}
+fn bufToIp(bytes: [6]u8) std.Io.net.IpAddress {
+    //.{bytes[0], bytes[1], bytes[2], bytes[3]}
+    var port: u16 = 0;
+    port |= bytes[4];
+    port <<= 8;
+    port |= bytes[5];
+    return .{ .ip4 = .{ .bytes = bytes[0..4].*, .port = port } };
 }
