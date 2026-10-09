@@ -195,7 +195,11 @@ pub const Networks = struct {
             for (&self.relayClients) |*client| {
                 if (client.* != null) {
                     //std.debug.print("already tracked relay client\n", .{});
-                    if (client.*.?.from_ip.eql(&new.from_ip)) return;
+                    // Still active: keep it from timing out mid-transfer.
+                    if (client.*.?.from_ip.eql(&new.from_ip)) {
+                        client.*.?.timestamp = new.timestamp;
+                        return;
+                    }
                 }
             } 
             for (&self.relayClients) |*client| {
@@ -319,7 +323,8 @@ pub const Networks = struct {
             }
         }
         fn bindSocket(io: Io) !std.Io.net.Socket {
-            const ip = try std.Io.net.IpAddress.parse("192.168.0.62", 5252);
+            // Every interface, so it works behind port forwarding and locally.
+            const ip = try std.Io.net.IpAddress.parse("0.0.0.0", 5252);
             std.debug.print("Server Opened...\n", .{});
             return try ip.bind(io, .{ .mode = .dgram });
         }

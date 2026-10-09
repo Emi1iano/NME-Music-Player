@@ -6,6 +6,8 @@ zig-out/
 backend/client/cache/
 backend/NetworksButBetter/backend/src/app/
 backend/NetworksButBetter/backend/src/testing/
+backend/NetworksButBetter/backend/src/status.txt
+backend/NetworksButBetter/backend/src/port.txt
 
 # ---- Flutter / Dart (every app under frontend/, incl. phone)
 .dart_tool/

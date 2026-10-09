@@ -2,6 +2,7 @@ const std = @import("std");
 const net = std.Io.net;
 const builtin = @import("builtin");
 const ClientCode = @import("server.zig").Networks.ClientCode;
+const sync = @import("sync.zig");
 
 const Io = std.Io;
 
@@ -35,11 +36,13 @@ const Networks = struct {
             Relay,
         };
 
-        fn init(io: Io) ClientState {
+        fn init(io: Io) !ClientState {
+            const server_ip = try getServerIp(io);
             return .{
-                .client_socket = getClientSocket(io) catch unreachable,
-                .server_ip = getServerIp() catch unreachable,
-                .key = FileManager.KeyStuff.getKey(io) catch unreachable,
+                .client_socket = try getClientSocket(io),
+                .server_ip = server_ip,
+                .resolved_ip = server_ip,
+                .key = try FileManager.KeyStuff.getKey(io),
             };
         }
         fn deinit(self: *ClientState, io: Io) void {
@@ -79,7 +82,16 @@ const Networks = struct {
             }
             return client_socket;
         }
-        fn getServerIp() !net.IpAddress {
+        /// "server.txt" in the working directory ("a.b.c.d:port") overrides the default.
+        fn getServerIp(io: Io) !net.IpAddress {
+            var buf: [64]u8 = undefined;
+            if (Config.read(io, "server.txt", &buf)) |text| {
+                if (std.mem.lastIndexOfScalar(u8, text, ':')) |i| {
+                    const port = std.fmt.parseInt(u16, text[i + 1 ..], 10) catch return error.BadServerAddress;
+                    return try std.Io.net.IpAddress.parse(text[0..i], port);
+                }
+                return error.BadServerAddress;
+            }
             return try std.Io.net.IpAddress.parse("24.243.26.72", 5252);
         }
         fn parseRecieverIp(bytes: []const u8) ?net.IpAddress {
@@ -179,31 +191,87 @@ const Networks = struct {
         }
         fn start(io: Io) !void {
             var GlobalListeningThread = try std.Thread.spawn(.{}, listen, .{io});
-
-            try sendInitialServerMessage(io);
-            try punching(io);
-            if (!clientState.should_disconnect) {
-                if (CHAT_MODE) {
-                    try clientStart(io);
-                } else {
-                    try Syncing.sync(io);
-                }
+            defer {
+                stopListener(io);
+                GlobalListeningThread.join();
             }
 
-            GlobalListeningThread.join();
+            try waitForOtherClient(io);
+            try punching(io);
+            if (clientState.should_disconnect) return error.Disconnected;
+            if (CHAT_MODE) {
+                try clientStart(io);
+            } else {
+                try LibrarySync.run(io);
+            }
         }
-        fn listen(io: Io) !void {
+        /// Sends the key to the server every 2s (which also keeps the server
+        /// from timing us out) until it pairs us with the other client.
+        fn waitForOtherClient(io: Io) !void {
+            Status.set(io, "Waiting for your other device to sync with key {s}...", .{clientState.key});
+            const started = Io.Timestamp.now(io, .awake);
+            while (!clientState.recieved_inital_info) {
+                if (clientState.should_disconnect) return error.Disconnected;
+                if (started.untilNow(io, .awake).toSeconds() >= 120) {
+                    Status.set(io, "No other device synced with key {s}", .{clientState.key});
+                    return error.NoOtherClient;
+                }
+                sendInitialServerMessage(io) catch {};
+                for (0..20) |_| {
+                    if (clientState.recieved_inital_info or clientState.should_disconnect) break;
+                    try io.sleep(.fromMilliseconds(100), .awake);
+                }
+            }
+        }
+        /// Tells the other client we're leaving, then wakes our own listener
+        /// (blocked in receive) with a TERMINATE sent to ourselves.
+        fn stopListener(io: Io) void {
+            if (clientState.recieved_inital_info) {
+                for (0..3) |_| sendTerminate(io) catch {};
+            }
+            var self = Io.net.IpAddress.parse("127.0.0.1", clientState.client_socket.address.getPort()) catch return;
+            clientState.client_socket.send(io, &self, &ClientCode.getByte(.TERMINATE)) catch {};
+        }
+        fn sendTerminate(io: Io) !void {
+            if (clientState.cliendMode == .P2P) {
+                try clientState.sendResolved(io, &ClientCode.getByte(.TERMINATE));
+            } else {
+                try clientState.sendResolved(io, &(ClientCode.getByte(.RELAY) ++ clientState.key ++ ClientCode.getByte(.TERMINATE)));
+            }
+        }
+        /// Sends `payload` as a DATA message, wrapped for the relay if needed.
+        fn sendData(io: Io, payload: []const u8) !void {
+            var buf: [1024]u8 = undefined;
+            var n: usize = 0;
+            if (clientState.cliendMode == .Relay) {
+                buf[0] = ClientCode.getByte(.RELAY)[0];
+                @memcpy(buf[1..9], &clientState.key);
+                n = 9;
+            }
+            buf[n] = ClientCode.getByte(.DATA)[0];
+            @memcpy(buf[n + 1 ..][0..payload.len], payload);
+            try clientState.sendResolved(io, buf[0 .. n + 1 + payload.len]);
+        }
+        /// Packets from the other client come from its local or public address,
+        /// or from the server when relaying.
+        fn isOtherClient(from: net.IpAddress) bool {
+            if (clientState.cliendMode == .Relay) return from.eql(&clientState.server_ip);
+            if (clientState.reciever_local_ip) |ip| if (from.eql(&ip)) return true;
+            if (clientState.reciever_public_ip) |ip| if (from.eql(&ip)) return true;
+            return from.eql(&clientState.resolved_ip);
+        }
+        fn listen(io: Io) void {
             var buffer: [1024]u8 = undefined;
 
-            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            defer gpa.deinit();
-            var writer = Io.Writer.Allocating.init(gpa.allocator());
-            defer writer.deinit();
-            var action: FileManager.Changes.Action = undefined;
-
-
             while (true) {
-                const message = try clientState.client_socket.receive(io, &buffer);
+                // On Windows an ICMP "port unreachable" from an earlier send shows
+                // up as a receive error; it isn't fatal, so keep listening.
+                const message = clientState.client_socket.receive(io, &buffer) catch |err| switch (err) {
+                    error.Canceled => return,
+                    else => continue,
+                };
+                if (message.data.len == 0) continue;
+                if (clientState.recieved_inital_info and isOtherClient(message.from)) LibrarySync.heardFromOtherClient(io);
                 const code = ClientCode.getCode(message.data[0]);
 
                 switch (code) {
@@ -212,8 +280,8 @@ const Networks = struct {
                             std.debug.print("Already initalized\n", .{});
                             continue;
                         }
-                        if (message.data.len == 13) {
-                            try clientState.parseInitialResponse(message.data[1..13].*);
+                        if (message.data.len == 13 and message.from.eql(&clientState.server_ip)) {
+                            clientState.parseInitialResponse(message.data[1..13].*) catch continue;
                             const p = clientState.reciever_public_ip.?.ip4.bytes;
                             var l: [4]u8 = .{0,0,0,0};
                             var lp: u16 = 0;
@@ -229,45 +297,31 @@ const Networks = struct {
                         testPrint("P2P: {s}\n", .{message.data[1..]});
                         //clientState.reciever_local_ip.? = message.from;
                         clientState.resolved_ip = message.from;
+                        if (!clientState.recieved_inital_info) continue;
                         if (clientState.reciever_local_ip) |ip| {
-                            try clientState.client_socket.send(io, &ip, ClientCode.getByte(.ACK) ++ "LOCAL IP");
+                            clientState.client_socket.send(io, &ip, ClientCode.getByte(.ACK) ++ "LOCAL IP") catch {};
                         } else {
-                            if (eql(message.data[1..9], "LOCAL IP")) {
+                            if (message.data.len >= 9 and eql(message.data[1..9], "LOCAL IP")) {
                                 clientState.reciever_local_ip = message.from;
                             }
                         }
-                        try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.ACK) ++ "PUBLIC IP");
+                        clientState.client_socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.ACK) ++ "PUBLIC IP") catch {};
                     },
                     .ACK => {
                         testPrint("ACK: {s}\n", .{message.data[1..]});
-                        if (acknowledged) continue;
-                        if (std.mem.eql(u8, message.data[1..9], "LOCAL IP")) {
+                        if (acknowledged or !clientState.recieved_inital_info) continue;
+                        if (message.data.len >= 9 and std.mem.eql(u8, message.data[1..9], "LOCAL IP") and clientState.reciever_local_ip != null) {
                             std.debug.print("USE LOCAL IP\n", .{});
                             clientState.resolved_ip = clientState.reciever_local_ip.?;
-                        } else if (std.mem.eql(u8, message.data[1..10], "PUBLIC IP")) {
+                        } else if (message.data.len >= 10 and std.mem.eql(u8, message.data[1..10], "PUBLIC IP")) {
                             std.debug.print("USE PUBLIC IP\n", .{});
                             clientState.resolved_ip = clientState.reciever_public_ip.?;
                         }
                         acknowledged = true;
                     },
                     .DATA => {
-                        // if (message.data.len < 100) {
-                        //     testPrint("DATA: {s}\n", .{message.data[1..]});
-                        // }
-                        if (eql(message.data[1..], "FILE")) action = .ADD
-                        else if (eql(message.data[1..], "STOP")) switch (action) {
-                            .ADD => {
-                                try Syncing.recieveFile(io, &writer.writer);
-                                _ = writer.writer.consumeAll();
-                                action = undefined;
-                            },
-                            else => {
-                                testPrint("Not implemented: {any}\n", .{action});
-                            }
-                        } else {
-                            try writer.writer.writeAll(message.data[1..]);
-                        }
-                        
+                        if (message.data.len < 2 or !isOtherClient(message.from)) continue;
+                        LibrarySync.onData(io, message.data[1..]);
                     },
                     .NONE => {
                         std.debug.print("Code not handled: {b}: {s}\n", .{ message.data[0], message.data[1..] });
@@ -281,118 +335,6 @@ const Networks = struct {
                 }
             }
         }
-        const Syncing = struct {
-            fn sync(io: Io) !void {
-                var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-                defer gpa.deinit();
-
-                const list = try FileManager.Changes.getChanges(io, gpa.allocator());
-                for (list.items) |e| {
-                    switch (e.action) {
-                        .ADD => {
-                            testPrint("{any}: {s}\n", .{e.action, e.path});
-                            try sendFile(io, e);
-                            try io.sleep(.fromMicroseconds(500), .awake);
-                        },
-                        else => {
-                            testPrint("Not implemented {any}\n", .{e.action});
-                        }
-                    }
-                }
-                testPrint("DONE SENDING STUFF\n", .{});
-                // const exit = "EXIT";
-                // try send(io, exit);
-            }
-            fn sendFile(io: Io, entry: FileManager.Changes.Entry) !void {
-                const path = entry.path;
-                const id = entry.id;
-                var file = try Io.Dir.openFileAbsolute(io, path, .{});
-                defer file.close(io);
-                const basename = std.fs.path.basename(path);
-                
-                var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-                defer gpa.deinit();
-
-                var rbuf: [1024*4]u8 = undefined;
-                var fr = file.reader(io, &rbuf);
-                var reader = &fr.interface;
-                const data = try reader.allocRemaining(gpa.allocator(), .unlimited);
-                var buufferedr = Io.Reader.fixed(data);
-
-                switch (clientState.cliendMode) {
-                    .P2P => {
-                        var senddata: [1024]u8 = undefined;
-                        senddata[0] = ClientCode.getByte(.DATA)[0];
-
-                        try clientState.sendResolved(io, ClientCode.getByte(.DATA) ++ "FILE");
-                        const header = try std.fmt.bufPrint(senddata[1..], "{d:0>8}{d:0>8}{s}{d:0>8}", .{id, basename.len, basename, data.len});
-                        testPrint("file header: {s}\n", .{header});
-                        try clientState.sendResolved(io, senddata[0..header.len+1]);
-
-                        var sent: usize = 0;
-                        while (true) {
-                            const d = buufferedr.take(1023) catch buufferedr.buffered();
-                            @memcpy(senddata[1..d.len+1], d);
-                            try clientState.sendResolved(io, senddata[0..d.len+1]);
-                            sent += 1;
-                            if (sent % 16 == 0) try io.sleep(.fromMilliseconds(1), .awake);
-                            if (d.len != 1023) break;
-                        }
-                        try clientState.sendResolved(io, ClientCode.getByte(.DATA) ++ "STOP");
-                    },
-                    .Relay => {
-                        var senddata: [1024]u8 = undefined;
-                        const header = try std.fmt.bufPrint(senddata[0..], "{s}{s}{s}", .{ClientCode.getByte(.RELAY), clientState.key, ClientCode.getByte(.DATA)});
-
-                        @memcpy(senddata[header.len..header.len+4], "FILE");
-                        try clientState.sendResolved(io, senddata[0..header.len+4]);
-
-                        const fheader = try std.fmt.bufPrint(senddata[header.len..], "{d:0>8}{d:0>8}{s}{d:0>8}", .{id, basename.len, basename, data.len});
-                        testPrint("file header: {s}\n", .{fheader});
-                        try clientState.sendResolved(io, senddata[0..header.len+fheader.len]);
-
-                        var sent: usize = 0;
-                        while (true) {
-                            const d = buufferedr.take(1024-header.len) catch buufferedr.buffered();
-                            @memcpy(senddata[header.len..header.len+d.len], d);
-                            try clientState.sendResolved(io, senddata[0..header.len+d.len]);
-                            sent += 1;
-                            if (sent % 16 == 0) try io.sleep(.fromMilliseconds(1), .awake);
-                            if (d.len != 1024-header.len) break;
-                        }
-
-                        @memcpy(senddata[header.len..header.len+4], "STOP");
-                        try clientState.sendResolved(io, senddata[0..header.len+4]);
-                    }
-                }
-
-            }
-            fn recieveFile(io: Io, writer: *Io.Writer) !void {
-                //TODO: use the id
-                const id = stringToNum(writer.buffered()[0..8]);
-                const name_len = stringToNum(writer.buffered()[8..16]);
-                const name = writer.buffered()[16..16+name_len];
-                const content_len = stringToNum(writer.buffered()[16+name_len..24+name_len]);
-                const content = writer.buffered()[24+name_len..24+name_len+content_len];
-
-                testPrint("adding file {s} with id: {d} len: {d}\n", .{name, id, content_len});
-
-                var dir = try FileManager.getMusicDir(io);
-                defer dir.close(io);
-
-                var file = try dir.createFile(io, name, .{ .read = true });
-
-                var wbuf: [1024*4]u8 = undefined;
-                var fwriter = file.writer(io, &wbuf);
-                var fw = &fwriter.interface;
-
-                try fw.writeAll(content);
-                try fw.flush();
-
-                file.close(io);
-                _ = try FileManager.MusicTable.addEntry(io, dir, name);
-            }
-        };
         const LocalIp = struct {
             fn getLocalIp(io: Io) ![4]u8 {
                 switch (builtin.os.tag) {
@@ -491,6 +433,362 @@ const Networks = struct {
             }
         };
     };
+};
+
+/// Exchanges music libraries with the connected client (see sync.zig).
+/// `run` drives it from the main thread; the listener thread calls `onData`.
+const LibrarySync = struct {
+    const gpa = std.heap.smp_allocator;
+    const peer_timeout_s = 20;
+
+    /// A blob (song list or song) being downloaded.
+    const Fetch = struct {
+        id: u32,
+        file: ?Io.File,
+        total: ?u32 = null,
+        got: std.DynamicBitSetUnmanaged = .{},
+        /// Chunks asked for this round that haven't arrived yet.
+        pending: usize = 0,
+        last_data: ?Io.Timestamp = null,
+        /// Song list contents (when `file` is null).
+        list: []u8 = &.{},
+        list_len: usize = 0,
+
+        fn deinit(f: *Fetch) void {
+            f.got.deinit(gpa);
+            gpa.free(f.list);
+        }
+    };
+
+    // Shared with the listener thread; guarded by `state_lock`.
+    var state_lock: Io.Mutex = .init;
+    var fetch: ?Fetch = null;
+    var peer_done: bool = false;
+    var last_heard: Io.Timestamp = undefined;
+
+    // Set before connecting, read-only afterwards.
+    var music_dir: Io.Dir = undefined;
+    var mine: sync.Library = undefined;
+    var ready: bool = false;
+
+    // Listener thread only.
+    var served: std.DynamicBitSetUnmanaged = .{};
+    var reader: ?struct { id: u32, file: Io.File } = null;
+
+    // Main thread only.
+    var window: usize = 128;
+
+    fn run(io: Io) !void {
+        Status.set(io, "Connected - exchanging song lists...", .{});
+        heardFromOtherClient(io); // pairing may have taken a while
+
+        var theirs = try fetchBlob(io, sync.list_id, null);
+        defer theirs.deinit();
+        const list = theirs.list[0..theirs.list_len];
+
+        var skip_buf: [64 * 1024]u8 = undefined;
+        const skip = Config.read(io, "skip.txt", &skip_buf) orelse "";
+
+        // Songs we don't have, by their index in the other client's list.
+        var want: std.ArrayList(struct { id: u32, path: []const u8 }) = .empty;
+        defer want.deinit(gpa);
+        var it = std.mem.splitScalar(u8, list, '\n');
+        var id: u32 = 0;
+        while (it.next()) |path| : (id += 1) {
+            if (!sync.isSafeRelPath(path) or !sync.isAudio(path) or mine.contains(path)) continue;
+            if (Config.hasLine(skip, path)) continue;
+            try want.append(gpa, .{ .id = id, .path = path });
+        }
+
+        for (want.items, 1..) |w, i| {
+            Status.set(io, "Downloading {d}/{d}: {s}", .{ i, want.items.len, w.path });
+            try fetchFile(io, w.id, w.path);
+        }
+
+        Status.set(io, "Finishing up...", .{});
+        try finish(io);
+        Status.set(io, "Synced: received {d}, sent {d} song(s)", .{ want.items.len, served.count() });
+    }
+
+    /// Opens the music folder and lists our songs. Called before connecting
+    /// so the other client can download our list as soon as we're paired.
+    fn prepare(io: Io) !void {
+        state_lock.lockUncancelable(io);
+        fetch = null;
+        peer_done = false;
+        last_heard = Io.Timestamp.now(io, .awake);
+        state_lock.unlock(io);
+        window = 128;
+        reader = null;
+
+        music_dir = try Config.openMusicDir(io);
+        errdefer music_dir.close(io);
+        mine = try sync.Library.scan(io, gpa, music_dir);
+        errdefer mine.deinit();
+        served = try std.DynamicBitSetUnmanaged.initEmpty(gpa, mine.paths.len);
+        ready = true;
+    }
+
+    fn cleanUp(io: Io) void {
+        if (!ready) return;
+        ready = false;
+        if (reader) |r| r.file.close(io);
+        reader = null;
+        served.deinit(gpa);
+        mine.deinit();
+        music_dir.close(io);
+    }
+
+    fn heardFromOtherClient(io: Io) void {
+        state_lock.lockUncancelable(io);
+        defer state_lock.unlock(io);
+        last_heard = Io.Timestamp.now(io, .awake);
+    }
+
+    fn checkConnected(io: Io) !void {
+        if (clientState.should_disconnect) return error.Disconnected;
+        state_lock.lockUncancelable(io);
+        const last = last_heard;
+        state_lock.unlock(io);
+        if (last.untilNow(io, .awake).toSeconds() >= peer_timeout_s) {
+            Status.set(io, "Lost connection to the other device", .{});
+            return error.LostConnection;
+        }
+    }
+
+    /// Downloads blob `id` (into `file`, or into memory for the song list).
+    /// Each round asks for up to `window` missing chunks and waits for them;
+    /// whatever got lost is asked for again in the next round.
+    fn fetchBlob(io: Io, id: u32, file: ?Io.File) !Fetch {
+        state_lock.lockUncancelable(io);
+        fetch = .{ .id = id, .file = file };
+        state_lock.unlock(io);
+        errdefer {
+            state_lock.lockUncancelable(io);
+            fetch.?.deinit();
+            fetch = null;
+            state_lock.unlock(io);
+        }
+
+        var ask: [1024]u32 = undefined;
+        var buf: [1024]u8 = undefined;
+        while (true) {
+            try checkConnected(io);
+
+            var n: usize = 0;
+            state_lock.lockUncancelable(io);
+            const f = &fetch.?;
+            const known = f.total != null;
+            if (f.total) |total| {
+                var i: u32 = 0;
+                while (i < total and n < window) : (i += 1) {
+                    if (!f.got.isSet(i)) {
+                        ask[n] = i;
+                        n += 1;
+                    }
+                }
+            } else {
+                ask[0] = 0; // the first chunk tells us the total
+                n = 1;
+            }
+            f.pending = n;
+            f.last_data = null;
+            state_lock.unlock(io);
+            if (n == 0) break;
+
+            var s: usize = 0;
+            while (s < n) : (s += sync.max_per_request) {
+                const e = @min(n, s + sync.max_per_request);
+                Networks.Client.sendData(io, sync.encodeRequest(&buf, id, ask[s..e])) catch {};
+            }
+
+            // Wait for the round; stop early once data arrived and then dried up.
+            const started = Io.Timestamp.now(io, .awake);
+            var lost: usize = 0;
+            while (true) {
+                try io.sleep(.fromMilliseconds(10), .awake);
+                state_lock.lockUncancelable(io);
+                lost = fetch.?.pending;
+                const last = fetch.?.last_data;
+                state_lock.unlock(io);
+                if (lost == 0) break;
+                if (started.untilNow(io, .awake).toMilliseconds() >= 500) break;
+                if (last) |l| if (l.untilNow(io, .awake).toMilliseconds() >= 60) break;
+            }
+            if (known) {
+                window = if (lost * 10 > n) @max(16, window / 2) else @min(ask.len, window + 64);
+            }
+        }
+
+        state_lock.lockUncancelable(io);
+        defer state_lock.unlock(io);
+        const done = fetch.?;
+        fetch = null;
+        return done;
+    }
+
+    /// Downloads a song to "<path>.part", then renames it into place.
+    fn fetchFile(io: Io, id: u32, path: []const u8) !void {
+        if (std.fs.path.dirnamePosix(path)) |dir| try music_dir.createDirPath(io, dir);
+        var part_buf: [512]u8 = undefined;
+        const part = try std.fmt.bufPrint(&part_buf, "{s}.part", .{path});
+        const file = try music_dir.createFile(io, part, .{ .read = true });
+        var f = fetchBlob(io, id, file) catch |err| {
+            file.close(io);
+            music_dir.deleteFile(io, part) catch {};
+            return err;
+        };
+        f.deinit();
+        file.close(io);
+        try Io.Dir.rename(music_dir, part, music_dir, path, io);
+    }
+
+    /// Says we're done until the other client is done too. Then both have
+    /// everything and `start` sends TERMINATE.
+    fn finish(io: Io) !void {
+        while (true) {
+            Networks.Client.sendData(io, &.{@intFromEnum(sync.Type.done)}) catch {};
+            state_lock.lockUncancelable(io);
+            const done = peer_done;
+            state_lock.unlock(io);
+            if (done) return;
+            // The other client may leave right after getting our last chunk.
+            checkConnected(io) catch return;
+            try io.sleep(.fromMilliseconds(300), .awake);
+        }
+    }
+
+    /// Handles a DATA payload from the other client (listener thread).
+    fn onData(io: Io, p: []const u8) void {
+        if (!ready) return;
+        switch (@as(sync.Type, @enumFromInt(p[0]))) {
+            .request => if (sync.Request.parse(p)) |r| serve(io, r),
+            .data => if (sync.Data.parse(p)) |d| receive(io, d),
+            .done => {
+                state_lock.lockUncancelable(io);
+                defer state_lock.unlock(io);
+                peer_done = true;
+            },
+            _ => {},
+        }
+    }
+
+    fn serve(io: Io, r: sync.Request) void {
+        var size: u64 = mine.blob.len;
+        var file: ?Io.File = null;
+        if (r.id != sync.list_id) {
+            if (r.id >= mine.paths.len) return;
+            file = openReader(io, r.id) catch return;
+            size = file.?.length(io) catch return;
+            served.set(r.id);
+        }
+        const total = sync.totalChunks(size);
+        if (total > sync.max_chunks) return;
+
+        var buf: [sync.data_header + sync.chunk_size]u8 = undefined;
+        for (0..r.count()) |i| {
+            const idx = r.index(i);
+            if (idx >= total) continue;
+            const offset = @as(u64, idx) * sync.chunk_size;
+            const n: usize = @intCast(@min(sync.chunk_size, size - offset));
+            const body = buf[sync.data_header..][0..n];
+            if (file) |f| {
+                const got = f.readPositionalAll(io, body, offset) catch return;
+                if (got != n) return;
+            } else {
+                @memcpy(body, mine.blob[@intCast(offset)..][0..n]);
+            }
+            sync.encodeDataHeader(&buf, r.id, idx, @intCast(total));
+            Networks.Client.sendData(io, buf[0 .. sync.data_header + n]) catch return;
+        }
+    }
+
+    fn openReader(io: Io, id: u32) !Io.File {
+        if (reader) |r| {
+            if (r.id == id) return r.file;
+            r.file.close(io);
+            reader = null;
+        }
+        const file = try music_dir.openFile(io, mine.paths[id], .{});
+        reader = .{ .id = id, .file = file };
+        return file;
+    }
+
+    fn receive(io: Io, d: sync.Data) void {
+        state_lock.lockUncancelable(io);
+        defer state_lock.unlock(io);
+        const f = &(fetch orelse return);
+        if (d.id != f.id) return;
+        if (f.total) |total| {
+            if (total != d.total) return;
+        } else {
+            if (f.file == null and d.total > sync.max_list_chunks) return;
+            f.got = std.DynamicBitSetUnmanaged.initEmpty(gpa, d.total) catch return;
+            if (f.file == null) f.list = gpa.alloc(u8, @as(usize, d.total) * sync.chunk_size) catch {
+                f.got.deinit(gpa);
+                return;
+            };
+            f.total = d.total;
+        }
+        if (f.got.isSet(d.idx)) return;
+
+        const offset = @as(u64, d.idx) * sync.chunk_size;
+        if (f.file) |file| {
+            file.writePositionalAll(io, d.bytes, offset) catch return;
+        } else {
+            @memcpy(f.list[@intCast(offset)..][0..d.bytes.len], d.bytes);
+            if (d.idx + 1 == d.total) f.list_len = @intCast(offset + d.bytes.len);
+        }
+        f.got.set(d.idx);
+        f.pending -|= 1;
+        f.last_data = Io.Timestamp.now(io, .awake);
+    }
+};
+
+/// Small text files in the working directory that the app and backend share.
+const Config = struct {
+    /// Reads a whole file, trimmed; null if it's missing, empty or too big.
+    fn read(io: Io, name: []const u8, buf: []u8) ?[]const u8 {
+        const file = Io.Dir.cwd().openFile(io, name, .{}) catch return null;
+        defer file.close(io);
+        const n = file.readPositionalAll(io, buf, 0) catch return null;
+        if (n == buf.len) return null;
+        const text = std.mem.trim(u8, buf[0..n], " \t\r\n");
+        return if (text.len == 0) null else text;
+    }
+
+    fn write(io: Io, name: []const u8, text: []const u8) void {
+        const file = Io.Dir.cwd().createFile(io, name, .{}) catch return;
+        defer file.close(io);
+        file.writePositionalAll(io, text, 0) catch {};
+    }
+
+    fn hasLine(text: []const u8, line: []const u8) bool {
+        var it = std.mem.tokenizeAny(u8, text, "\r\n");
+        while (it.next()) |l| {
+            if (eql(l, line)) return true;
+        }
+        return false;
+    }
+
+    /// The folder named in "musicDir.txt", or "music" in the working directory.
+    fn openMusicDir(io: Io) !Io.Dir {
+        var buf: [1024]u8 = undefined;
+        const cwd = Io.Dir.cwd();
+        const path = read(io, "musicDir.txt", &buf) orelse "music";
+        cwd.createDirPath(io, path) catch {};
+        return cwd.openDir(io, path, .{ .iterate = true });
+    }
+};
+
+/// Progress for the app to show, in "status.txt" in the working directory.
+const Status = struct {
+    fn set(io: Io, comptime fmt: []const u8, args: anytype) void {
+        var buf: [512]u8 = undefined;
+        const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
+        testPrint("{s}\n", .{text});
+        Config.write(io, "status.txt", text);
+    }
 };
 
 const app_directory: []const u8 = "app/";
@@ -831,16 +1129,19 @@ pub fn main(init: std.process.Init) !void {
 }
 pub fn start(io: Io, args: []const [:0]const u8) !void {
     Networks.Client.acknowledged = false;
-    clientState = .init(io);
+    clientState = Networks.ClientState.init(io) catch |err| {
+        Status.set(io, "Sync failed: {s}", .{@errorName(err)});
+        return err;
+    };
     defer clientState.deinit(io);
 
     switch (args.len) {
         0 => {
-            try Networks.Client.start(io);
+            try syncLibrary(io);
         },
         1 => {
             if (eql(args[0], "sync")) {
-                try Networks.Client.start(io);
+                try syncLibrary(io);
             } else if (eql(args[0], "sync_new_key")) {
                 try FileManager.KeyStuff.writeKey(io, try FileManager.KeyStuff.generateNewKey(io));
             }
@@ -853,7 +1154,7 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
                 try FileManager.KeyStuff.writeKey(io, key);
                 clientState.key = key;
 
-                try Networks.Client.start(io);
+                try syncLibrary(io);
             } else if (eql(args[0], "add")) {
                 testPrint("add command not implemented\n", .{});
             } else if (eql(args[0], "rename")) {
@@ -864,6 +1165,30 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
             testPrint("Invalid args\n", .{});
         },
     }
+}
+
+/// Connects with the other client and exchanges songs. Progress and the
+/// result go to status.txt; our UDP port goes to port.txt so the app can
+/// stop the sync by sending TERMINATE to it.
+fn syncLibrary(io: Io) !void {
+    var port_buf: [8]u8 = undefined;
+    Config.write(io, "port.txt", std.fmt.bufPrint(&port_buf, "{d}", .{clientState.client_socket.address.getPort()}) catch "");
+
+    LibrarySync.prepare(io) catch |err| {
+        Status.set(io, "Can't open the music folder: {s}", .{@errorName(err)});
+        return err;
+    };
+    // Runs after Client.start has stopped the listener thread.
+    defer LibrarySync.cleanUp(io);
+
+    Networks.Client.start(io) catch |err| {
+        switch (err) {
+            error.NoOtherClient, error.LostConnection => {}, // already explained
+            error.Disconnected => Status.set(io, "Sync stopped", .{}),
+            else => Status.set(io, "Sync failed: {s}", .{@errorName(err)}),
+        }
+        return err;
+    };
 }
 
 var lock = std.Io.Mutex.init;
