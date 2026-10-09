@@ -72,15 +72,16 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
             icon: const Icon(Icons.sync),
             label: const Text('Sync'),
           ),
-          OutlinedButton(
-            onPressed: s.syncing
-                ? null
-                : () {
-                    s.newKey();
-                    ctl.clear();
-                  },
-            child: const Text('New key'),
-          ),
+          if (s.syncing)
+            OutlinedButton(onPressed: s.cancelSync, child: const Text('Cancel'))
+          else
+            OutlinedButton(
+              onPressed: () {
+                s.newKey();
+                ctl.clear();
+              },
+              child: const Text('New key'),
+            ),
         ]),
         const SizedBox(height: 12),
         Row(children: [

@@ -7,6 +7,7 @@ class MusicSync {
   static Future<List<String>> scan(String folder) async => [];
   static Future<void> deleteFile(String folder, String path) async {}
   static Future<String?> readKey() async => null;
+  static Future<void> cancel() async {}
   static Future<String> sync({
     required String key,
     required String folder,

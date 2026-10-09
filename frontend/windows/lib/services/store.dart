@@ -211,6 +211,8 @@ class Store extends ChangeNotifier {
     await rescan();
   }
 
+  Future<void> cancelSync() => MusicSync.cancel();
+
   /// Syncs again, this time also downloading the deleted songs in [restore].
   Future<void> resync(Set<String> restore) async {
     deleted.removeAll(restore);
