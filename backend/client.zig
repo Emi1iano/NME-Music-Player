@@ -261,10 +261,7 @@ const Networks = struct {
                         // if (message.data.len < 100) {
                         //     testPrint("DATA: {s}\n", .{message.data[1..]});
                         // }
-                        if (eql(message.data[1..], "FILE")) action = .ADD 
-                        else if (eql(message.data[1..], "RENAME")) action = .RENAME 
-                        else if (eql(message.data[1..], "DELETE")) action = .DELETE 
-                        else if (eql(message.data[1..], "STOP")) switch (action) {
+                        if (eql(message.data[1..], "FILE")) action = .ADD else if (eql(message.data[1..], "RENAME")) action = .RENAME else if (eql(message.data[1..], "DELETE")) action = .DELETE else if (eql(message.data[1..], "STOP")) switch (action) {
                             .ADD => {
                                 try Syncing.recieveFile(io, &writer.writer);
                                 _ = writer.writer.consumeAll();
@@ -466,7 +463,7 @@ const Networks = struct {
                         const header = try std.fmt.bufPrint(senddata[0..], "{s}{s}{s}", .{ ClientCode.getByte(.RELAY), clientState.key, ClientCode.getByte(.DATA) });
                         const header1 = try std.fmt.bufPrint(senddata[header.len..], "RENAME", .{});
                         try clientState.sendResolved(io, senddata[0 .. header.len + header1.len]);
-                        const data = try std.fmt.bufPrint(senddata[header.len..], "{d} {s}", .{entry.id, std.fs.path.basename(entry.path) });
+                        const data = try std.fmt.bufPrint(senddata[header.len..], "{d} {s}", .{ entry.id, std.fs.path.basename(entry.path) });
                         try clientState.sendResolved(io, senddata[0 .. header.len + data.len]);
                         const footer = try std.fmt.bufPrint(senddata[header.len..], "STOP", .{});
                         try clientState.sendResolved(io, senddata[0 .. header.len + footer.len]);
@@ -478,13 +475,13 @@ const Networks = struct {
                 const temp = try r.takeDelimiter(' ');
                 const id = stringToNum(temp.?);
                 const new = r.buffered();
-                testPrint("renaming: id:{d} to {s}", .{id, new});
+                testPrint("renaming: id:{d} to {s}", .{ id, new });
 
                 var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
                 defer gpa.deinit();
                 const list = try FileManager.MusicTable.parseMusicTableFile(io, gpa.allocator());
-                const old = list.items[id-1].path;
-                
+                const old = list.items[id - 1].path;
+
                 try FileManager.renameFile(io, old, new);
                 _ = try FileManager.MusicTable.updateRename(io, old, new);
             }
@@ -726,10 +723,12 @@ const FileManager = struct {
         dir.renamePreserve(std.fs.path.basename(old), dir, new, io) catch |err| switch (err) {
             error.FileNotFound => {
                 testPrint("File {s} not found.\n", .{std.fs.path.basename(old)});
-            }, error.PathAlreadyExists => {
+            },
+            error.PathAlreadyExists => {
                 testPrint("Existing {s} already found.\n", .{new});
                 return err;
-            }, else => return err,
+            },
+            else => return err,
         };
     }
     const Commands = struct {
@@ -745,10 +744,6 @@ const FileManager = struct {
                     } else {
                         const music_dir = try getMusicDir(io);
                         defer music_dir.close(io);
-                        //TODO: Figure out what this means
-                        // var music_path: [256]u8 = undefined;
-                        // const music_path_len = try music_dir.realPath(io, &music_path);
-                        // const relative = std.fs.path.relative(gpa: Allocator, Io.Dir.cwd(), null, music_path[0..music_path_len], path)
 
                         break :blk Object{ .file = try music_dir.openFile(io, path, .{ .mode = .read_only }) };
                     }
@@ -798,7 +793,6 @@ const FileManager = struct {
             if (!isSong(old)) return error.NotASong;
             if (!eql(std.fs.path.extension(old), std.fs.path.extension(new))) return error.MismatchExtensions;
 
-            
             // May exist in music paths
             try MusicPath.updateRename(io, old, new);
             // If not in music table return err
@@ -806,17 +800,19 @@ const FileManager = struct {
                 error.FileNotFound => {
                     testPrint("File {s} not found\n", .{old});
                     return;
-                }, 
+                },
                 error.FileNotFoundInTable => {
                     testPrint("File {s} not found in music table\n", .{old});
                     return;
-                }, else => return err,
+                },
+                else => return err,
             };
             try Changes.addRename(io, id);
             renameFile(io, old, new) catch |err| switch (err) {
                 error.PathAlreadyExists => {
                     return;
-                }, else => return err,
+                },
+                else => return err,
             };
         }
         fn renameTesting(io: Io, old: []const u8, new: []const u8) !void {
@@ -962,7 +958,7 @@ const FileManager = struct {
         fn updateRename(io: Io, old: []const u8, new: []const u8) !void {
             var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer gpa.deinit();
-            
+
             var list = try parsePathsFile(io, gpa.allocator());
             if (std.fs.path.isAbsolute(old)) {
                 for (list.items, 0..) |*path, i| {
@@ -970,8 +966,8 @@ const FileManager = struct {
                         var new_path: [256]u8 = undefined;
                         const old_path = std.fs.path.dirname(old);
                         @memcpy(new_path[0..old_path.?.len], old_path.?);
-                        @memcpy(new_path[old_path.?.len..old_path.?.len+new.len], new);
-                        list.items[i] = new_path[0..old_path.?.len+new.len];
+                        @memcpy(new_path[old_path.?.len .. old_path.?.len + new.len], new);
+                        list.items[i] = new_path[0 .. old_path.?.len + new.len];
                         break;
                     }
                 }
@@ -984,7 +980,7 @@ const FileManager = struct {
                     }
                 }
             }
-            
+
             var file = try getMusicPathsFile(io);
             var buf: [256]u8 = undefined;
             var writer = file.writer(io, &buf);
@@ -1253,7 +1249,7 @@ const FileManager = struct {
             const absolute_path = if (std.fs.path.isAbsolute(old)) old else blk: {
                 var music_dir = try getMusicDir(io);
                 defer music_dir.close(io);
-                
+
                 const dir_path_len = try music_dir.realPathFile(io, old, &path_buf);
                 break :blk path_buf[0..dir_path_len];
             };
@@ -1262,7 +1258,7 @@ const FileManager = struct {
                 if (eql(e.*.path, absolute_path)) {
                     var new_path_buf: [256]u8 = undefined;
                     const old_path = std.fs.path.dirname(absolute_path);
-                    const new_path = try std.fmt.bufPrint(&new_path_buf, "{s}\\{s}", .{old_path.?, new});
+                    const new_path = try std.fmt.bufPrint(&new_path_buf, "{s}\\{s}", .{ old_path.?, new });
                     list.items[i].path = new_path;
                     result = list.items[i].id;
                     break;
@@ -1275,10 +1271,10 @@ const FileManager = struct {
             var writer = file.writer(io, &buf);
             var w = &writer.interface;
             for (list.items) |e| {
-                try w.print("{d} {s} {s}\n", .{e.id, e.hash, e.path});
+                try w.print("{d} {s} {s}\n", .{ e.id, e.hash, e.path });
             }
             try writer.end();
-            
+
             return result;
         }
         fn clearMusicTable(io: Io) !void {
@@ -1382,17 +1378,169 @@ const FileManager = struct {
             try MusicPath.clearMusicPaths(io);
         }
     };
-};
+    const idkMusicTable = struct {
+        const Entry = struct {
+            id: usize,
+            hash: []const u8,
+            path: []const u8,
+        };
+        fn somrthing(io: Io) !void {
+            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer gpa.deinit();
 
+            const file = try getOrCreateFile(io, "musicTable.txt");
+
+            var musicTable = try MyFile(Entry, "{d} {s}{s}", .{ @as(u8, ' '), 32, @as(u8, '\n') }).init(gpa.allocator(), file);
+            try musicTable.parse(io);
+            defer musicTable.deinit();
+        }
+    };
+};
+fn MyFile(comptime T: type, comptime format: []const u8, parse_rules: anytype) type {
+    return struct {
+        list: MyList(T),
+        file: Io.File,
+        alloc: std.mem.Allocator,
+
+        fn init(alloc: std.mem.Allocator, file: Io.File) !@This() {
+            return .{
+                .list = try MyList(T).init(alloc),
+                .file = file,
+                .alloc = alloc,
+            };
+        }
+        fn deinit(self: *@This()) void {
+            self.list.deinit();
+        }
+        fn parse(self: *@This(), io: Io) !void {
+            var buf: [1024]u8 = undefined;
+            var fr = self.file.reader(io, &buf);
+            const data = try fr.interface.allocRemaining(self.alloc, .unlimited);
+            var r = Io.Reader.fixed(data);
+
+            const fields = @typeInfo(T).@"struct".fields;
+            const parse_fields = @typeInfo(@TypeOf(parse_rules)).@"struct".fields;
+            comptime std.debug.assert(fields.len == parse_fields.len);
+
+            while (r.seek < r.end) {
+                var item: T = undefined;
+                inline for (parse_fields, fields) |pf, f| {
+                    const rule = @field(parse_rules, pf.name);
+
+                    const chunk: []const u8 = switch (pf.type) {
+                        u8 => (try r.takeDelimiter(rule)) orelse return error.EndOfStream,
+                        comptime_int => try r.take(rule),
+                        else => @compileError("type not supported: " ++ @typeName(pf.type)),
+                    };
+
+                    @field(item, f.name) = switch (f.type) {
+                        usize => stringToNum(chunk),
+                        []const u8 => chunk,
+                        else => @compileError("field not supported: " ++ @typeName(f.type)),
+                    };
+                }
+                try self.list.append(item);
+            }
+        }
+        fn printAll(self: *@This()) !void {
+            for (self.list.items()) |item| {
+                testPrint(format, item);
+            }
+        }
+        fn writeAll(self: *@This(), io: Io) !void {
+            var buf: [1024]u8 = undefined;
+            var fw = self.file.writer(io, &buf);
+            var w = &fw.interface;
+
+            for (self.list.items()) |item| {
+                try w.print(format, item);
+            }
+            try fw.end();
+        }
+        fn clearFile(self: *@This(), io: Io) !void {
+            var fw = self.file.writer(io, &.{});
+            try fw.end();
+        }
+    };
+}
+fn MyList(comptime T: type) type {
+    return struct {
+        list: std.ArrayList(T),
+        alloc: std.mem.Allocator,
+
+        fn init(alloc: std.mem.Allocator) !@This() {
+            return .{
+                .list = try std.ArrayList(T).initCapacity(alloc, 4),
+                .alloc = alloc,
+            };
+        }
+        fn deinit(self: *@This()) void {
+            self.list.deinit(self.alloc);
+        }
+        fn append(self: *@This(), value: T) !void {
+            try self.list.append(self.alloc, value);
+        }
+        fn items(self: *@This()) []T {
+            return self.list.items;
+        }
+        // TODO Figure out this
+        fn printList(self: *@This()) void {
+            for (self.items()) |x| {
+                _ = x;
+            }
+        }
+    };
+}
+fn MySend(io: Io, comptime code: ClientCode, args: anytype) !void {
+    _ = io;
+    var buf: [1024]u8 = undefined;
+    const header = switch (clientState.cliendMode) {
+        .P2P => try std.fmt.bufPrint(buf[0..], "{s}", .{ClientCode.getByte(code)}),
+        .Relay => try std.fmt.bufPrint(buf[0..], "{s}{s}{s}", .{ ClientCode.getByte(.RELAY), clientState.key, ClientCode.getByte(code) }),
+    };
+    const typeinfo = @typeInfo(@TypeOf(args));
+    const fields = typeinfo.@"struct".fields;
+
+    inline for (fields) |f| {
+        const data: []const u8 = switch (@typeInfo(f.type)) {
+            .pointer => |p| blk: switch (p.size) {
+                .many => if (p.sentinel() != null) break :blk std.mem.span(@field(args, f.name)),
+                .slice => break :blk @field(args, f.name),
+                .one => switch (@typeInfo(p.child)) {
+                    .array => |a| if (a.child == u8) break :blk @field(args, f.name),
+                    else => {},
+                },
+                else => @compileError("arg not supported: " ++ @typeName(f.type)),
+            },
+            else => @compileError("arg not supported: " ++ @typeName(f.type)),
+        };
+        var r = Io.Reader.fixed(data);
+        while (r.seek < r.end) {
+            const d = r.take(1024 - header.len) catch r.buffered();
+            @memcpy(buf[header.len .. header.len + d.len], d);
+            // try clientState.sendResolved(io, &buf);
+            testPrint("{s}\n", .{buf[0 .. header.len + d.len]});
+            if (d.len != 1024 - header.len) break;
+        }
+    }
+}
 pub fn main(init: std.process.Init) !void {
     const alloc = init.arena.allocator();
     const args = try init.minimal.args.toSlice(alloc);
     defer alloc.free(args[0..]);
-
+    
     try start(init.io, args[1..]);
     _ = try FileManager.MusicTable.parseMusicTableFile(init.io, alloc);
-
-    // testPrint("{d} {d}", .{@sizeOf(Io.Dir), @sizeOf(Io.Dir)});
+    var file = try Io.Dir.cwd().openFile(init.io, "testing/app/musicTable.txt", .{.mode = .read_write});
+    defer file.close(init.io);
+    
+    //     var myfile = try MyFile(FileManager.MusicTable.Entry, "{d} {s}{s}\n", .{@as(u8, ' '), 32, @as(u8, '\n')}).init(alloc, file);
+    //     defer myfile.deinit();
+    //
+    //     try myfile.parse(init.io);
+    //     try myfile.printAll();
+    //     try myfile.writeAll(init.io);
+    // try MySend(init.io, ClientCode.DATA, .{ "hello world", "this is joe", "lets have a good time", "!!!" });
 }
 pub fn start(io: Io, args: []const [:0]const u8) !void {
     Networks.Client.acknowledged = false;
@@ -1529,7 +1677,7 @@ test "Rename Command" {
     defer gpa.deinit();
 
     try FileManager.testing.resetCache(io);
-    
+
     try std.testing.expectError(error.NotAFile, FileManager.Commands.renameTesting(io, "music", "song.mp3"));
     try std.testing.expectError(error.MismatchExtensions, FileManager.Commands.renameTesting(io, "album/nice.mp3", "song.opus"));
     try FileManager.Commands.addPathTableChange(io, "c.mp3");
