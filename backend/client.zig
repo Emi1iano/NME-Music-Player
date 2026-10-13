@@ -409,6 +409,9 @@ const Networks = struct {
                 const name_len = stringToNum(writer.buffered()[8..16]);
                 const name = writer.buffered()[16 .. 16 + name_len];
                 const content_len = stringToNum(writer.buffered()[16 + name_len .. 24 + name_len]);
+                if (content_len != writer.buffered().len-24+name_len) {
+                    testPrint("Mismatched Lengths: {d}, {d}", .{content_len, writer.buffered().len-24+name_len});
+                } 
                 const content = writer.buffered()[24 + name_len .. 24 + name_len + content_len];
 
                 testPrint("adding file {s} with id: {d} len: {d}\n", .{ name, id, content_len });
