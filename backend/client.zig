@@ -1256,9 +1256,10 @@ const FileManager = struct {
             var result: usize = 0;
             for (list.items, 0..) |*e, i| {
                 if (eql(e.*.path, absolute_path)) {
-                    var new_path_buf: [256]u8 = undefined;
+                    // var new_path_buf: [256]u8 = undefined;
                     const old_path = std.fs.path.dirname(absolute_path);
-                    const new_path = try std.fmt.bufPrint(&new_path_buf, "{s}\\{s}", .{ old_path.?, new });
+                    //const new_path = try std.fmt.bufPrint(&new_path_buf, "{s}\\{s}", .{ old_path.?, new });
+                    const new_path = try std.fs.path.join(gpa.allocator(), &.{ old_path.?, new });
                     list.items[i].path = new_path;
                     result = list.items[i].id;
                     break;
@@ -1528,12 +1529,12 @@ pub fn main(init: std.process.Init) !void {
     const alloc = init.arena.allocator();
     const args = try init.minimal.args.toSlice(alloc);
     defer alloc.free(args[0..]);
-    
+
     try start(init.io, args[1..]);
     _ = try FileManager.MusicTable.parseMusicTableFile(init.io, alloc);
-    var file = try Io.Dir.cwd().openFile(init.io, "testing/app/musicTable.txt", .{.mode = .read_write});
+    var file = try Io.Dir.cwd().openFile(init.io, "testing/app/musicTable.txt", .{ .mode = .read_write });
     defer file.close(init.io);
-    
+
     //     var myfile = try MyFile(FileManager.MusicTable.Entry, "{d} {s}{s}\n", .{@as(u8, ' '), 32, @as(u8, '\n')}).init(alloc, file);
     //     defer myfile.deinit();
     //
