@@ -1,1 +1,0 @@
-zig build all -Doptimize=ReleaseFast && tar -a -cf zig-out.zip "zig-out/android" "zig-out/windows" && echo 'Done'

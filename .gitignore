@@ -1,13 +1,12 @@
-# ---- Zig (backend/client, backend/server)
+﻿# ---- Zig (backend/)
 .zig-cache/
 zig-cache/
 zig-out/
 # Runtime data the backend writes next to itself (keys, tables, synced music)
-backend/client/cache/
-backend/NetworksButBetter/backend/src/app/
-backend/NetworksButBetter/backend/src/testing/
-backend/NetworksButBetter/backend/src/status.txt
-backend/NetworksButBetter/backend/src/port.txt
+backend/app/
+backend/testing/
+backend/status.txt
+backend/port.txt
 
 # ---- Flutter / Dart (every app under frontend/, incl. phone)
 .dart_tool/
