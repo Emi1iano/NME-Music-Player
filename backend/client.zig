@@ -410,9 +410,9 @@ const Networks = struct {
                 const name = writer.buffered()[16 .. 16 + name_len];
                 const content_len = stringToNum(writer.buffered()[16 + name_len .. 24 + name_len]);
                 if (content_len != writer.buffered().len-24+name_len) {
-                    testPrint("Mismatched Lengths: {d}, {d}", .{content_len, writer.buffered().len-24+name_len});
+                    testPrint("Mismatched Lengths: {d}, {d}\n", .{content_len, writer.buffered().len-24+name_len});
                 } 
-                const content = writer.buffered()[24 + name_len .. 24 + name_len + content_len];
+                const content = writer.buffered()[24 + name_len ..];
 
                 testPrint("adding file {s} with id: {d} len: {d}\n", .{ name, id, content_len });
 
@@ -1382,24 +1382,29 @@ const FileManager = struct {
             try MusicPath.clearMusicPaths(io);
         }
     };
-    const idkMusicTable = struct {
-        const Entry = struct {
-            id: usize,
-            hash: []const u8,
-            path: []const u8,
-        };
-        fn somrthing(io: Io) !void {
-            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            defer gpa.deinit();
-
-            const file = try getOrCreateFile(io, "musicTable.txt");
-
-            var musicTable = try MyFile(Entry, "{d} {s}{s}", .{ @as(u8, ' '), 32, @as(u8, '\n') }).init(gpa.allocator(), file);
-            try musicTable.parse(io);
-            defer musicTable.deinit();
-        }
-    };
 };
+// const NewFileManager = struct {
+//     const Commands = struct {
+//         fn add(io: Io, path: []const u8) !void {}
+//         fn rename(io: Io, old: []const u8, new: []const u8) !void {}
+//         fn scan(io: Io, path: []const u8) !void {}
+//         fn delete(io: Io, path: []const u8) !void {}
+//     };
+//     const MusicTable = struct {
+//             TODO @as()
+//         file: MyFile(Entry, "{d} {s}{s}\n", .{' ', 32, '\n'}),
+//         const Entry = struct {
+//             id: usize,
+//             hash: []const u8,
+//             path: []const u8,
+//         };
+//         fn init() @This() {
+//             return .{
+//                 
+//             };
+//         }
+//     };
+// };
 fn MyFile(comptime T: type, comptime format: []const u8, parse_rules: anytype) type {
     return struct {
         list: MyList(T),
@@ -1535,16 +1540,6 @@ pub fn main(init: std.process.Init) !void {
 
     try start(init.io, args[1..]);
     _ = try FileManager.MusicTable.parseMusicTableFile(init.io, alloc);
-    var file = try Io.Dir.cwd().openFile(init.io, "testing/app/musicTable.txt", .{ .mode = .read_write });
-    defer file.close(init.io);
-
-    //     var myfile = try MyFile(FileManager.MusicTable.Entry, "{d} {s}{s}\n", .{@as(u8, ' '), 32, @as(u8, '\n')}).init(alloc, file);
-    //     defer myfile.deinit();
-    //
-    //     try myfile.parse(init.io);
-    //     try myfile.printAll();
-    //     try myfile.writeAll(init.io);
-    // try MySend(init.io, ClientCode.DATA, .{ "hello world", "this is joe", "lets have a good time", "!!!" });
 }
 pub fn start(io: Io, args: []const [:0]const u8) !void {
     Networks.Client.acknowledged = false;
