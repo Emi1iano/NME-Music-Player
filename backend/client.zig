@@ -2,21 +2,8 @@ const std = @import("std");
 const net = std.Io.net;
 const builtin = @import("builtin");
 const ClientCode = @import("server.zig").Networks.ClientCode;
-
 const Io = std.Io;
 
-// Goal for now
-// Connect two clients to allow talk between the two
-
-// send initial message to server
-// recieve reciever ip
-// attempt to connect to reciever ip
-// if fails fall back to relaying
-
-//TODO: add something like this
-//  sendResolved(.{"FILE", file.content, "STOP"});
-//  sendResolved(.{"DELETE", id, "STOP"});
-//
 const TESTING_RELAY: bool = false;
 const TESTING: bool = true;
 const CHAT_MODE: bool = false;
@@ -610,7 +597,14 @@ const FileManager = struct {
         const app_dir = try getAppDir(io);
         defer app_dir.close(io);
 
-        return app_dir.openDir(io, music_dir_name, .{}) catch try app_dir.createDirPathOpen(io, music_dir_name, .{});
+        return app_dir.openDir(io, music_dir_name, .{ .iterate = true }) catch try app_dir.createDirPathOpen(io, music_dir_name, .{});
+    }
+    fn getRemoveDir(io: Io) !Io.Dir {
+        const remove_dir_name = "removedSongs";
+        const app_dir = try getAppDir(io);
+        defer app_dir.close(io);
+
+        return app_dir.openDir(io, remove_dir_name, .{ .iterate = true }) catch try app_dir.createDirPathOpen(io, remove_dir_name, .{});
     }
     fn getOrCreateFile(io: Io, name: []const u8) !Io.File {
         const app_dir = try getAppDir(io);
@@ -1386,6 +1380,153 @@ const FileManager = struct {
 };
 const NewFileManager = struct {
     const Commands = struct {
+        const Aux = struct {
+            fn recurseDir(io: Io, dir: Io.Dir, table: *MusicTable, changes: *Changes) !void {
+                var it = dir.iterate();
+
+                while (it.next(io)) |e| {
+                    if (e == null) break;
+                    testPrint("scanning: {s}\n", .{e.?.name});
+                    switch (e.?.kind) {
+                        .file => {
+                            var file = try dir.openFile(io, e.?.name, .{});
+                            defer file.close(io);
+                            try addFile(io, file, table, changes);
+                        },
+                        .directory => {
+                            var dir1 = try dir.openDir(io, e.?.name, .{ .iterate = true });
+                            defer dir1.close(io);
+                            try recurseDir(io, dir1, table, changes);
+                        },
+                        else => {},
+                    }
+                } else |_| {}
+            }
+            fn addFile(io: Io, file: Io.File, table: *MusicTable, changes: *Changes) !void {
+                var buf: [256]u8 = undefined;
+                const len = try file.realPath(io, &buf);
+                const hash = try hashFile(io, file);
+                const result: struct { bool, usize } = blk: for (table.file.list.items()) |e| {
+                    if (eql(&hash, e.hash)) {
+                        testPrint("\x1b[34mSong {s} already included\x1b[0m\n", .{std.fs.path.basename(buf[0..len])});
+                        break .{ false, 0 };
+                    }
+                } else {
+                    var list = &table.file.list;
+                    var alloc = &table.file.alloc;
+                    const id = list.items().len + 1;
+                    try list.append(.{ .id = id, .hash = try alloc.dupe(u8, &hash), .path = try alloc.dupe(u8, buf[0..len]) });
+                    testPrint("\x1b[32mAdded song: {s}\x1b[0m\n", .{std.fs.path.basename(buf[0..len])});
+                    break :blk .{ true, id };
+                };
+                if (result.@"0") {
+                    try changes.file.list.append(.{ .action = try changes.file.alloc.dupe(u8, "add"), .id = result.@"1" });
+                }
+            }
+            fn hashFile(io: Io, file: Io.File) ![32]u8 {
+                var result: [32]u8 = undefined;
+                var b = std.crypto.hash.Blake3.init(.{});
+
+                var buf: [1024 * 4]u8 = undefined;
+                var reader = file.reader(io, &buf);
+                var r = &reader.interface;
+
+                var data: [1024 * 4]u8 = undefined;
+                while (true) {
+                    const len = try r.readSliceShort(&data);
+                    b.update(data[0..len]);
+                    if (len != data.len) break;
+                }
+
+                b.final(&result);
+                return result;
+            }
+            fn removeDelete(io: Io, path: []const u8, action: []const u8) !void {
+                var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+                defer gpa.deinit();
+
+                var music_table = try MusicTable.init(io, gpa.allocator());
+                defer music_table.deinit(io);
+                try music_table.file.parse(io);
+                var music_paths = try MusicPaths.init(io, gpa.allocator());
+                defer music_paths.deinit(io);
+                try music_paths.file.parse(io);
+                var changes = try Changes.init(io, gpa.allocator());
+                defer changes.deinit(io);
+                try changes.file.parse(io);
+                const music_dir = try FileManager.getMusicDir(io);
+                defer music_dir.close(io);
+
+                if (!FileManager.isFile(path)) return error.PathNotAFile;
+                var file = switch (std.fs.path.isAbsolute(path)) {
+                    true => try Io.Dir.openFileAbsolute(io, path, .{}),
+                    false => music_dir.openFile(io, path, .{}) catch |err| switch (err) {
+                        error.FileNotFound => {
+                            testPrint("File: {s} not found\n", .{path});
+                            return;
+                        },
+                        else => return err,
+                    },
+                };
+                defer file.close(io);
+                const hash = try Aux.hashFile(io, file);
+
+                const entry: MusicTable.Entry = for (music_table.file.list.items()) |e| {
+                    if (eql(&hash, e.hash)) {
+                        const entry = music_table.file.list.list.orderedRemove(e.id - 1);
+                        try music_table.writeAllOrdered(io);
+                        break entry;
+                    }
+                } else {
+                    testPrint("Attempt to {s} song {s} not found in music table\n", .{ action, path });
+                    return;
+                };
+
+                var path_buf: [256]u8 = undefined;
+                const absolute_path: []const u8 = if (std.fs.path.isAbsolute(path)) path else blk: {
+                    const len = try file.realPath(io, &path_buf);
+                    break :blk path_buf[0..len];
+                };
+
+                testPrint("{s} {s} with id: {d}\n", .{ action, entry.path, entry.id });
+                if (eql(action, "delete")) {
+                    // FIXME
+                    // try Io.Dir.deleteFileAbsolute(io, entry.path);
+                    // TODO if add 1 and delete 1 then cancel them out
+                    // add id:1
+                    // add id:2
+                    // delete id:1
+                } else if (eql(action, "remove")) {
+                    var remove_file = try FileManager.getRemoveDir(io);
+                    defer remove_file.close(io);
+                    var buf: [256]u8 = undefined;
+                    const new_path_len = try remove_file.realPath(io, &buf);
+                    const basename = std.fs.path.basename(path);
+                    const new_path = try std.fs.path.join(gpa.allocator(), &.{ buf[0..new_path_len], basename });
+                    defer gpa.allocator().free(new_path);
+
+                    try Io.Dir.renameAbsolute(absolute_path, new_path, io);
+                    // TODO if add 1 and remove 1 then cancel them out
+                    // add id:1
+                    // add id:2
+                    // remove id:1
+                }
+                try changes.file.list.append(.{ .action = action, .id = entry.id });
+                try changes.file.writeAll(io);
+
+                for (music_paths.file.list.items(), 0..) |e, i| {
+                    const path_absolute_path: []const u8 = if (std.fs.path.isAbsolute(e.path)) path else blk: {
+                        const len = try file.realPath(io, &path_buf);
+                        break :blk path_buf[0..len];
+                    };
+                    if (eql(absolute_path, path_absolute_path)) {
+                        _ = music_paths.file.list.list.swapRemove(i);
+                        try music_paths.file.writeAll(io);
+                        break;
+                    }
+                }
+            }
+        };
         // path relative to app/music or absolute
         fn add(io: Io, path: []const u8) !void {
             var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -1417,7 +1558,7 @@ const NewFileManager = struct {
                     try music_paths.file.list.append(.{ .path = try music_paths.file.alloc.dupe(u8, path) });
                     try music_paths.file.writeAll(io);
                 }
-                try Add.addFile(io, file, &music_table, &changes);
+                try Aux.addFile(io, file, &music_table, &changes);
             } else {
                 const dir = switch (is_absolute) {
                     true => try Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }),
@@ -1430,12 +1571,111 @@ const NewFileManager = struct {
                     try music_paths.file.list.append(.{ .path = try music_paths.file.alloc.dupe(u8, path) });
                     try music_paths.file.writeAll(io);
                 }
-                try Add.recurseDir(io, dir, &music_table, &changes);
+                try Aux.recurseDir(io, dir, &music_table, &changes);
             }
+            try music_table.file.writeAll(io);
+            try changes.file.writeAll(io);
         }
-        // fn rename(io: Io, old: []const u8, new: []const u8) !void {}
-        // fn scan(io: Io, path: []const u8) !void {}
-        // fn delete(io: Io, path: []const u8) !void {}
+        fn rename(io: Io, old: []const u8, new: []const u8) !void {
+            if (!FileManager.isFile(old)) return;
+            if (!FileManager.isSong(old)) return;
+            if (!eql(std.fs.path.extension(old), std.fs.path.extension(new))) {
+                testPrint("Extensions dont match in rename\n", .{});
+                return;
+            }
+            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer gpa.deinit();
+
+            var music_table = try MusicTable.init(io, gpa.allocator());
+            defer music_table.deinit(io);
+            try music_table.file.parse(io);
+            var music_paths = try MusicPaths.init(io, gpa.allocator());
+            defer music_paths.deinit(io);
+            try music_paths.file.parse(io);
+            var changes = try Changes.init(io, gpa.allocator());
+            defer changes.deinit(io);
+            try changes.file.parse(io);
+
+            const is_absolute = std.fs.path.isAbsolute(old);
+            const dir_path = std.fs.path.dirname(old);
+            var dir = if (dir_path != null and is_absolute) try Io.Dir.openDirAbsolute(io, dir_path.?, .{}) else if (dir_path == null) try FileManager.getMusicDir(io) else unreachable;
+            defer dir.close(io);
+            const file = try dir.openFile(io, old, .{});
+            defer file.close(io);
+
+            const hash = try Aux.hashFile(io, file);
+            var entry: *MusicTable.Entry = undefined;
+            for (music_table.file.list.items()) |*e| {
+                if (eql(&hash, e.hash)) {
+                    entry = e;
+                    break;
+                }
+            } else {
+                testPrint("Song {s} not found in music table\n", .{old});
+                return;
+            }
+
+            testPrint("Renaming {s} to {s}\n", .{ std.fs.path.basename(old), new });
+            try dir.renamePreserve(old, dir, new, io);
+
+            var new_path: [256]u8 = undefined;
+            const len = try file.realPath(io, &new_path);
+
+            entry.*.path = try music_table.file.alloc.dupe(u8, new_path[0..len]);
+            try music_table.file.writeAll(io);
+
+            try changes.file.list.append(.{ .action = "rename", .id = entry.id });
+            try changes.file.writeAll(io);
+
+            //TODO music paths
+        }
+        fn scan(io: Io) !void {
+            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer gpa.deinit();
+
+            var music_table = try MusicTable.init(io, gpa.allocator());
+            defer music_table.deinit(io);
+            try music_table.file.parse(io);
+            var music_paths = try MusicPaths.init(io, gpa.allocator());
+            defer music_paths.deinit(io);
+            try music_paths.file.parse(io);
+            var changes = try Changes.init(io, gpa.allocator());
+            defer changes.deinit(io);
+            try changes.file.parse(io);
+            const music_dir = try FileManager.getMusicDir(io);
+            defer music_dir.close(io);
+
+            try Aux.recurseDir(io, music_dir, &music_table, &changes);
+            for (music_paths.file.list.items()) |e| {
+                const path = e.path;
+                switch (FileManager.isSong(path)) {
+                    true => {
+                        const file = switch (std.fs.path.isAbsolute(path)) {
+                            true => try Io.Dir.openFileAbsolute(io, path, .{}),
+                            false => try music_dir.openFile(io, path, .{}),
+                        };
+                        defer file.close(io);
+                        try Aux.addFile(io, file, &music_table, &changes);
+                    },
+                    false => {
+                        const dir = switch (std.fs.path.isAbsolute(path)) {
+                            true => try Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }),
+                            false => try music_dir.openDir(io, path, .{ .iterate = true }),
+                        };
+                        defer dir.close(io);
+                        try Aux.recurseDir(io, dir, &music_table, &changes);
+                    },
+                }
+            }
+            try music_table.file.writeAll(io);
+            try changes.file.writeAll(io);
+        }
+        fn delete(io: Io, path: []const u8) !void {
+            try Aux.removeDelete(io, path, "delete");
+        }
+        fn remove(io: Io, path: []const u8) !void {
+            try Aux.removeDelete(io, path, "remove");
+        }
     };
     const MusicTable = struct {
         file: table,
@@ -1456,6 +1696,16 @@ const NewFileManager = struct {
         }
         fn deinit(self: *@This(), io: Io) void {
             self.file.deinit(io);
+        }
+        fn writeAllOrdered(self: *@This(), io: Io) !void {
+            var buf: [1024]u8 = undefined;
+            var fw = self.file.file.writer(io, &buf);
+            var w = &fw.interface;
+
+            for (self.file.list.items(), 1..) |item, i| {
+                try w.print(MusicTable.table.returnfmt(), .{ i, item.hash, item.path });
+            }
+            try fw.end();
         }
     };
     const MusicPaths = struct {
@@ -1498,70 +1748,6 @@ const NewFileManager = struct {
             self.file.deinit(io);
         }
     };
-    const Add = struct {
-        fn recurseDir(io: Io, dir: Io.Dir, table: *MusicTable, changes: *Changes) !void {
-            var it = dir.iterate();
-
-            while (it.next(io)) |e| {
-                if (e == null) break;
-                testPrint("scanning: {s}\n", .{e.?.name});
-                switch (e.?.kind) {
-                    .file => {
-                        var file = try dir.openFile(io, e.?.name, .{});
-                        defer file.close(io);
-                        try addFile(io, file, table, changes);
-                    },
-                    .directory => {
-                        var dir1 = try dir.openDir(io, e.?.name, .{ .iterate = true });
-                        defer dir1.close(io);
-                        try recurseDir(io, dir1, table, changes);
-                    },
-                    else => {},
-                }
-            } else |_| {}
-        }
-        fn addFile(io: Io, file: Io.File, table: *MusicTable, changes: *Changes) !void {
-            var buf: [256]u8 = undefined;
-            const len = try file.realPath(io, &buf);
-            const hash = try hashFile(io, file);
-            const result: struct { bool, usize } = blk: for (table.file.list.items()) |e| {
-                if (eql(&hash, e.hash)) {
-                    testPrint("\x1b[34mSong {s} already included\x1b[0m\n", .{std.fs.path.basename(buf[0..len])});
-                    break .{ false, 0 };
-                }
-            } else {
-                var list = &table.file.list;
-                var alloc = &table.file.alloc;
-                const id = list.items().len + 1;
-                try list.append(.{ .id = id, .hash = try alloc.dupe(u8, &hash), .path = try alloc.dupe(u8, buf[0..len]) });
-                try table.file.writeAll(io);
-                testPrint("\x1b[32mAdded song: {s}\x1b[0m\n", .{std.fs.path.basename(buf[0..len])});
-                break :blk .{ true, id };
-            };
-            if (result.@"0") {
-                try changes.file.list.append(.{ .action = try changes.file.alloc.dupe(u8, "add"), .id = result.@"1" });
-                try changes.file.writeAll(io);
-            }
-        }
-    };
-    fn hashFile(io: Io, file: Io.File) ![32]u8 {
-        var result: [32]u8 = undefined;
-        var b = std.crypto.hash.Blake3.init(.{});
-
-        var buf: [1024 * 4]u8 = undefined;
-        var reader = file.reader(io, &buf);
-        var r = &reader.interface;
-
-        var data: [1024 * 4]u8 = undefined;
-        while (true) {
-            const len = try r.readSliceShort(&data);
-            b.update(data[0..len]);
-            if (len != data.len) break;
-        }
-
-        b.final(&result);
-        return result;
-    }
 };
 fn MyFile(comptime T: type, comptime format: []const u8, parse_rules: anytype) type {
     return struct {
@@ -1629,6 +1815,9 @@ fn MyFile(comptime T: type, comptime format: []const u8, parse_rules: anytype) t
             var fw = self.file.writer(io, &.{});
             try fw.end();
         }
+        fn returnfmt() []const u8 {
+            return format;
+        }
     };
 }
 fn MyList(comptime T: type) type {
@@ -1692,6 +1881,7 @@ fn MySend(io: Io, comptime code: ClientCode, args: anytype) !void {
         }
     }
 }
+
 pub fn main(init: std.process.Init) !void {
     const alloc = init.arena.allocator();
     const args = try init.minimal.args.toSlice(alloc);
@@ -1710,29 +1900,29 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
     globalStorage = .init(gpa.allocator());
 
     //FIXME me later, this is temp
-    if (args.len >= 2) {
-        var buf: [256]u8 = undefined;
-        var i: usize = 0;
-        for (args[1..], 1..) |arg, a| {
-            @memcpy(buf[i..i+arg.len], arg);
-            i += arg.len;
-            if (a == args.len-1) break;
-            buf[i] = ' ';
-            i += 1;
-        }
-        if (eql(args[0], "add")) {
-            try FileManager.Commands.addPathTableChange(io, buf[0..i]);
-            return;
-        } else if (eql(args[0], "delete")) {
-            testPrint("DELETEING: {s}\n", .{buf[0..i]});
-            const entry = try FileManager.MusicTable.deleteEntry(io, buf[0..i]);
-            try FileManager.Changes.deleteSong(io, entry.id);
-            //std.fs.path.isAbsolute(path: []const u8)
-            try FileManager.deleteSongRelative(io, buf[0..i]);
-            return;
-        }
-    }
-    
+    // if (args.len >= 2) {
+    //     var buf: [256]u8 = undefined;
+    //     var i: usize = 0;
+    //     for (args[1..], 1..) |arg, a| {
+    //         @memcpy(buf[i .. i + arg.len], arg);
+    //         i += arg.len;
+    //         if (a == args.len - 1) break;
+    //         buf[i] = ' ';
+    //         i += 1;
+    //     }
+    //     if (eql(args[0], "add")) {
+    //         try FileManager.Commands.addPathTableChange(io, buf[0..i]);
+    //         return;
+    //     } else if (eql(args[0], "delete")) {
+    //         testPrint("DELETEING: {s}\n", .{buf[0..i]});
+    //         const entry = try FileManager.MusicTable.deleteEntry(io, buf[0..i]);
+    //         try FileManager.Changes.deleteSong(io, entry.id);
+    //         //std.fs.path.isAbsolute(path: []const u8)
+    //         try FileManager.deleteSongRelative(io, buf[0..i]);
+    //         return;
+    //     }
+    // }
+
     switch (args.len) {
         0 => {
             try Networks.Client.start(io);
@@ -1743,7 +1933,8 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
             } else if (eql(args[0], "sync_new_key")) {
                 try FileManager.KeyStuff.writeKey(io, try FileManager.KeyStuff.generateNewKey(io));
             } else if (eql(args[0], "scan")) {
-                try FileManager.MusicPath.rescanFolders(io);
+                // try FileManager.MusicPath.rescanFolders(io);
+                try NewFileManager.Commands.scan(io);
             } else if (eql(args[0], "testreset")) {
                 try FileManager.testing.resetCache(io);
             }
@@ -1759,18 +1950,22 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
                 try Networks.Client.start(io);
             } else if (eql(args[0], "add")) {
                 //FileManager.MusicPath.addPathAndScan(io, try FileManager.getMusicDir(io), args[1]);
-                try FileManager.Commands.addPathTableChange(io, args[1]);
+                // try FileManager.Commands.addPathTableChange(io, args[1]);
+                try NewFileManager.Commands.add(io, args[1]);
             } else if (eql(args[0], "delete")) {
-                testPrint("DELETEING: {s}\n", .{args[1]});
-                const entry = try FileManager.MusicTable.deleteEntry(io, args[1]);
-                try FileManager.Changes.deleteSong(io, entry.id);
-                //std.fs.path.isAbsolute(path: []const u8)
-                try FileManager.deleteSongRelative(io, args[1]);
+                try NewFileManager.Commands.delete(io, args[1]);
+                // const entry = try FileManager.MusicTable.deleteEntry(io, args[1]);
+                // try FileManager.Changes.deleteSong(io, entry.id);
+                // //std.fs.path.isAbsolute(path: []const u8)
+                // try FileManager.deleteSongRelative(io, args[1]);
+            } else if (eql(args[0], "remove")) {
+                try NewFileManager.Commands.remove(io, args[1]);
             }
         },
         3 => {
             if (eql(args[0], "rename")) {
-                try FileManager.Commands.rename(io, args[1], args[2]);
+                // try FileManager.Commands.rename(io, args[1], args[2]);
+                try NewFileManager.Commands.rename(io, args[1], args[2]);
             }
         },
         else => {
@@ -1815,18 +2010,6 @@ pub fn stringToNum(bytes: []const u8) usize {
     };
     return result;
 }
-// test "FileManaging" {
-//     const io = std.testing.io;
-//     var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-//     defer gpa.deinit();
-
-//     try FileManager.MusicPath.addPathAndScan(io, Io.Dir.cwd(),"music/album");
-//     try FileManager.MusicPath.addPathAndScan(io, Io.Dir.cwd(), "music/c.mp3");
-//     const list = try FileManager.Changes.getChanges(io, gpa.allocator());
-//     for (list.items) |e| {
-//         testPrint("{any}: {s}\n", .{e.action, e.path});
-//     }
-// }
 test "Add Command" {
     const io = std.testing.io;
     var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
