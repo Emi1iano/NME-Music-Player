@@ -9,6 +9,7 @@ const TESTING: bool = true;
 const CHAT_MODE: bool = false;
 
 var clientState: Networks.ClientState = undefined;
+var rx: Reliable.Rx = .{};
 const song_extensions = [_][]const u8{ ".mp3", ".opus", ".flac" };
 const app_directory: []const u8 = "app/";
 
@@ -192,10 +193,7 @@ const Networks = struct {
 
             var gpa = std.heap.DebugAllocator(.{}).init;
             defer _ = gpa.deinit();
-
-            var writer = try Io.Writer.Allocating.initCapacity(gpa.allocator(), 60_000_000);
-            defer writer.deinit();
-            var action: NewFileManager.Action = undefined;
+            defer rx.reset(gpa.allocator());
 
             var group: std.Io.Group = .init;
             defer group.cancel(io);
@@ -249,19 +247,8 @@ const Networks = struct {
                         }
                         acknowledged = true;
                     },
-                    .DATA => {
-                        // if (message.data.len < 100) {
-                        //     testPrint("DATA: {s}\n", .{message.data[1..]});
-                        // }
-                        if (eql(data, "ADD")) action = .Add else if (eql(data, "DELETE")) action = .Delete else if (eql(data, "RENAME")) action = .Rename else if (eql(data, "STOP")) {
-                            const owned = try writer.toOwnedSlice();
-                            errdefer gpa.allocator().free(owned);
-                            try group.concurrent(io, Syncing.threadWrapper, .{ io, gpa.allocator(), owned, action });
-                            action = undefined;
-                        } else {
-                            try writer.writer.writeAll(data);
-                        }
-                    },
+                    .CHUNK => try rx.onChunk(io, gpa.allocator(), &group, data),
+                    .CHUNK_ACK => if (Reliable.active_tx.load(.acquire)) |tx| tx.onAck(data),
                     .NONE => {
                         std.debug.print("Code not handled: {b}: {s}\n", .{ message.data[0], message.data[1..] });
                     },
@@ -404,21 +391,17 @@ const Syncing = struct {
                     var header_buf: [256]u8 = undefined;
                     const base_path = Io.Dir.path.basename(path);
                     const header = try std.fmt.bufPrint(&header_buf, "{d:0>8}{s}{d:0>8}{s}{d:0>8}", .{ e.id, hash, base_path.len, base_path, data.len });
+                    const blob = try std.mem.concat(gpa.allocator(), u8, &.{ header, data });
+                    defer gpa.allocator().free(blob);
                     testPrint("Sending file {s}\n", .{base_path});
-                    try MySend(io, .DATA, .{ "ADD", header, data, "STOP" });
+                    try Reliable.send(io, gpa.allocator(), 0, blob);
                     testPrint("Done sending\n", .{});
                 },
-                .Delete => {
-                    testPrint("Sending ID: {d} to delete\n", .{e.id});
-                    try MySend(io, .DATA, .{ "DELETE", string_id, "STOP" });
-                },
-                .Rename => {
-                    testPrint("Sending ID: {d} to rename\n", .{e.id});
-                    try MySend(io, .DATA, .{ "RENAME", string_id, "STOP" });
-                },
+                .Delete => try Reliable.send(io, gpa.allocator(), 1, string_id),
+                .Rename => try Reliable.send(io, gpa.allocator(), 2, string_id),
             }
         }
-        try MySend(io, .TERMINATE, .{});
+        //try MySend(io, .TERMINATE, .{});
         // try changes.file.clearFile(io);
     }
     fn recieve(io: Io, alloc: std.mem.Allocator, data: []const u8, action: NewFileManager.Action) !void {
@@ -468,6 +451,223 @@ const Syncing = struct {
             testPrint("Error recieving {any}", .{err});
         };
     }
+};
+const Reliable = struct {
+    pub const CHUNK = 900; // payload bytes. Must stay <= 1024 - (relay header len) - XHDR
+    const XHDR = 13; // tid u32 | idx u32 | total_len u32 | action u8
+    const WINDOW = 512; // chunks in flight (~450 KB)
+    const RTO_TICKS = 200; // timeout, in ~1ms sleep ticks
+    const FAST_RETX_TICKS = 20; // min gap between fast retransmits of one chunk
+    const PACE = 32; // sleep 1ms after this many sends (avoids socket buffer overflow)
+    const STALL_TICKS = 10_000; // give up if no progress for ~10s
+    const NEVER = std.math.maxInt(u64);
+    const MAX_TRANSFER = 1 << 30;
+
+    var next_tid: u32 = 1;
+
+    // ---------------- sender ----------------
+    pub const Tx = struct {
+        tid: u32,
+        n: u32,
+        acked: []u8, // 0/1. Written by listen loop, read by sender
+        highest_end: std.atomic.Value(u32) = .init(0), // one past highest acked idx
+        cum_seen: u32 = 0, // listener-only
+
+        /// Called from the listen loop on every CHUNK_ACK.
+        pub fn onAck(self: *Tx, d: []const u8) void {
+            if (d.len < 16) return;
+            if (std.mem.readInt(u32, d[0..4], .little) != self.tid) return;
+            const cum = @min(std.mem.readInt(u32, d[4..8], .little), self.n);
+            const bitmap = std.mem.readInt(u64, d[8..16], .little);
+
+            var hi = self.highest_end.load(.monotonic);
+            while (self.cum_seen < cum) : (self.cum_seen += 1) {
+                @atomicStore(u8, &self.acked[self.cum_seen], 1, .release);
+            }
+            hi = @max(hi, cum);
+            for (0..64) |k| {
+                if ((bitmap >> @as(u6, @intCast(k))) & 1 == 0) continue;
+                const idx = @as(usize, cum) + 1 + k;
+                if (idx >= self.n) break;
+                @atomicStore(u8, &self.acked[idx], 1, .release);
+                hi = @max(hi, @as(u32, @intCast(idx + 1)));
+            }
+            self.highest_end.store(hi, .release);
+        }
+    };
+
+    pub var active_tx: std.atomic.Value(?*Tx) = .init(null);
+
+    fn sendChunk(io: Io, tid: u32, action: u8, idx: usize, blob: []const u8) !void {
+        var pkt: [XHDR + CHUNK]u8 = undefined;
+        std.mem.writeInt(u32, pkt[0..4], tid, .little);
+        std.mem.writeInt(u32, pkt[4..8], @intCast(idx), .little);
+        std.mem.writeInt(u32, pkt[8..12], @intCast(blob.len), .little);
+        pkt[12] = action;
+        const off = idx * CHUNK;
+        const len = @min(CHUNK, blob.len - off);
+        @memcpy(pkt[XHDR..][0..len], blob[off..][0..len]);
+        try MySend(io, .CHUNK, .{@as([]const u8, pkt[0 .. XHDR + len])});
+    }
+
+    /// Reliably deliver `blob`. Blocks until fully acked.
+    /// Must run in a different task than the listen loop (which feeds onAck).
+    pub fn send(io: Io, alloc: std.mem.Allocator, action: u8, blob: []const u8) !void {
+        const n: usize = @max(1, (blob.len + CHUNK - 1) / CHUNK);
+        const acked = try alloc.alloc(u8, n);
+        defer alloc.free(acked);
+        @memset(acked, 0);
+        const sent_tick = try alloc.alloc(u64, n);
+        defer alloc.free(sent_tick);
+        @memset(sent_tick, NEVER);
+
+        const tid = next_tid;
+        next_tid +%= 1;
+        var tx: Tx = .{ .tid = tid, .n = @intCast(n), .acked = acked };
+        active_tx.store(&tx, .release);
+        defer active_tx.store(null, .release);
+
+        var base: usize = 0;
+        var tick: u64 = 0;
+        var burst: usize = 0;
+        var stall: u64 = 0;
+
+        while (true) {
+            const old_base = base;
+            while (base < n and @atomicLoad(u8, &acked[base], .acquire) == 1) base += 1;
+            if (base == n) return;
+            if (base != old_base) stall = 0 else stall += 1;
+            if (stall > STALL_TICKS) return error.PeerUnresponsive;
+
+            const hi_end = tx.highest_end.load(.acquire);
+            const end = @min(n, base + WINDOW);
+            var i = base;
+            while (i < end) : (i += 1) {
+                if (@atomicLoad(u8, &acked[i], .acquire) == 1) continue;
+                const never = sent_tick[i] == NEVER;
+                const age = tick -% sent_tick[i];
+                const due = never or age >= RTO_TICKS or
+                    (hi_end >= i + 4 and age >= FAST_RETX_TICKS);
+                if (!due) continue;
+
+                try sendChunk(io, tid, action, i, blob);
+                sent_tick[i] = tick;
+                burst += 1;
+                if (burst % PACE == 0) {
+                    try io.sleep(.fromMilliseconds(1), .awake);
+                    tick += 1;
+                }
+            }
+            try io.sleep(.fromMilliseconds(1), .awake);
+            tick += 1;
+        }
+    }
+
+    // ---------------- receiver ----------------
+    fn sendAck(io: Io, tid: u32, cum: u32, got: []const bool) !void {
+        var p: [16]u8 = undefined;
+        std.mem.writeInt(u32, p[0..4], tid, .little);
+        std.mem.writeInt(u32, p[4..8], cum, .little);
+        var bitmap: u64 = 0;
+        for (0..64) |k| {
+            const idx = @as(usize, cum) + 1 + k;
+            if (idx >= got.len) break;
+            if (got[idx]) bitmap |= @as(u64, 1) << @as(u6, @intCast(k));
+        }
+        std.mem.writeInt(u64, p[8..16], bitmap, .little);
+        try MySend(io, .CHUNK_ACK, .{@as([]const u8, &p)});
+    }
+
+    pub const Rx = struct {
+        active: bool = false,
+        tid: u32 = 0,
+        action: u8 = 0,
+        buf: []u8 = &.{},
+        got: []bool = &.{},
+        count: usize = 0,
+        cum: usize = 0,
+        last_done: ?u32 = null,
+        last_done_n: u32 = 0,
+
+        fn reset(self: *Rx, alloc: std.mem.Allocator) void {
+            if (self.active) {
+                alloc.free(self.buf);
+                alloc.free(self.got);
+            }
+            self.* = .{ .last_done = self.last_done, .last_done_n = self.last_done_n };
+        }
+
+        /// Called from the listen loop for every CHUNK packet (`d` = message.data[1..]).
+        pub fn onChunk(self: *Rx, io: Io, alloc: std.mem.Allocator, group: *std.Io.Group, d: []const u8) !void {
+            if (d.len < XHDR) return;
+            const tid = std.mem.readInt(u32, d[0..4], .little);
+            const idx: usize = std.mem.readInt(u32, d[4..8], .little);
+            const total_len: usize = std.mem.readInt(u32, d[8..12], .little);
+            const action = d[12];
+            const payload = d[XHDR..];
+
+            // Sender missed our final ACK: repeat it.
+            if (self.last_done == tid) {
+                try sendAck(io, tid, self.last_done_n, &.{});
+                return;
+            }
+
+            if (!self.active or self.tid != tid) {
+                if (total_len > MAX_TRANSFER) return;
+                self.reset(alloc);
+                const n = @max(1, (total_len + CHUNK - 1) / CHUNK);
+                const buf = try alloc.alloc(u8, total_len);
+                errdefer alloc.free(buf);
+                const got = try alloc.alloc(bool, n);
+                @memset(got, false);
+                self.* = .{
+                    .active = true, .tid = tid, .action = action,
+                    .buf = buf, .got = got,
+                    .last_done = self.last_done, .last_done_n = self.last_done_n,
+                };
+            }
+
+            if (total_len != self.buf.len or idx >= self.got.len) return;
+            const off = idx * CHUNK;
+            if (payload.len != @min(CHUNK, self.buf.len - off)) return;
+
+            const was_dup = self.got[idx];
+            if (!was_dup) {
+                @memcpy(self.buf[off..][0..payload.len], payload);
+                self.got[idx] = true;
+                self.count += 1;
+                while (self.cum < self.got.len and self.got[self.cum]) self.cum += 1;
+            }
+
+            const n = self.got.len;
+            if (self.count == n) {
+                const owned = self.buf;
+                const act: NewFileManager.Action = switch (self.action) {
+                    0 => .Add,
+                    1 => .Delete,
+                    2 => .Rename,
+                    else => {
+                        alloc.free(owned);
+                        alloc.free(self.got);
+                        self.* = .{ .last_done = self.last_done, .last_done_n = self.last_done_n };
+                        return;
+                    },
+                };
+                alloc.free(self.got);
+                self.* = .{ .last_done = tid, .last_done_n = @intCast(n) };
+                try sendAck(io, tid, @intCast(n), &.{});
+                errdefer alloc.free(owned);
+                try group.concurrent(io, Syncing.threadWrapper, .{ io, alloc, owned, act });
+                return;
+            }
+
+            // ACK on gaps, duplicates, and every 4th chunk (cumulative ACKs cover the rest)
+            const in_order = !was_dup and idx + 1 == self.cum;
+            if (!in_order or self.count % 4 == 0) {
+                try sendAck(io, tid, @intCast(self.cum), self.got);
+            }
+        }
+    };
 };
 const NewFileManager = struct {
     const Action = enum(u2) {
@@ -1116,13 +1316,10 @@ fn MySend(io: Io, comptime code: ClientCode, args: anytype) !void {
             else => @compileError("arg not supported: " ++ @typeName(f.type)),
         };
         var r = Io.Reader.fixed(data);
-        var amount: usize = 0;
         while (r.seek < r.end) {
             const d = r.take(1024 - header.len) catch r.buffered();
             @memcpy(buf[header.len .. header.len + d.len], d);
             try clientState.sendResolved(io, buf[0 .. header.len + d.len]);
-            amount += 1;
-            if (amount % 64 == 0) try io.sleep(.fromMilliseconds(1), .awake);
             if (d.len != 1024 - header.len) break;
         }
     }

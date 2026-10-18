@@ -50,6 +50,8 @@ pub const Networks = struct {
         FILE_CONTENT = 0x9,
         TERMINATE = 0xA,
         DATA = 0xB,
+        CHUNK = 0xC,
+        CHUNK_ACK = 0xD,
         
 
         pub fn getCode(byte: u8) ClientCode {
@@ -65,6 +67,8 @@ pub const Networks = struct {
                 0x9 => return ClientCode.FILE_CONTENT,
                 0xA => return ClientCode.TERMINATE,
                 0xB => return ClientCode.DATA,
+                0xC => return ClientCode.CHUNK,
+                0xD => return ClientCode.CHUNK_ACK,
                 else => return ClientCode.NONE,
             }
         }
@@ -79,6 +83,8 @@ pub const Networks = struct {
                 .RELAY => return .{0x06},
                 .TERMINATE => return .{0x0A},
                 .DATA => return .{0x0B},
+                .CHUNK => return .{0x0C},
+                .CHUNK_ACK => return .{0x0D},
                 else => unreachable,
             }
         }
