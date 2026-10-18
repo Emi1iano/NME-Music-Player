@@ -448,7 +448,7 @@ const Syncing = struct {
                 try writer.end();
                 const new_hash = try NewFileManager.Commands.Aux.hashFile(io, file);
                 if (!eql(hash, &new_hash)) {
-                    testPrint("Hashes dont match\n{x}\n{x}\n", .{ hash, new_hash });
+                    testPrint("Hashes dont match\n{x}\n{x}\nRecieved {d:.2}%", .{ hash, new_hash, @as(f32, @floatFromInt(content.len)) / @as(f32, @floatFromInt(content_len))});
                 } else {
                     testPrint("Successfully recieved song {s}\n", .{name});
                 }
