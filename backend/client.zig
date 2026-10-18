@@ -448,7 +448,7 @@ const Syncing = struct {
                 try writer.end();
                 const new_hash = try NewFileManager.Commands.Aux.hashFile(io, file);
                 if (!eql(hash, &new_hash)) {
-                    testPrint("Hashes dont match\n{x}\n{x}\nRecieved {d:.2}%", .{ hash, new_hash, @as(f32, @floatFromInt(content.len)) / @as(f32, @floatFromInt(content_len))});
+                    testPrint("Hashes dont match\n{x}\n{x}\nRecieved {d:.2}% of bytes.\n", .{ hash, new_hash, @as(f32, @floatFromInt(content.len)) / @as(f32, @floatFromInt(content_len)) * 100});
                 } else {
                     testPrint("Successfully recieved song {s}\n", .{name});
                 }
@@ -1121,7 +1121,6 @@ fn MySend(io: Io, comptime code: ClientCode, args: anytype) !void {
             const d = r.take(1024 - header.len) catch r.buffered();
             @memcpy(buf[header.len .. header.len + d.len], d);
             try clientState.sendResolved(io, buf[0 .. header.len + d.len]);
-            //testPrint("{s}\n", .{buf[0 .. header.len + d.len]});
             amount += 1;
             if (amount % 64 == 0) try io.sleep(.fromMilliseconds(1), .awake);
             if (d.len != 1024 - header.len) break;
