@@ -187,9 +187,17 @@ class Backend extends ChangeNotifier {
   Future<bool> delete(String trackPath) async {
     if (!_checkArg(trackPath, 'delete')) return false;
     final code = await _run('delete $trackPath');
-    final gone = !File(p.join(musicPath, trackPath)).existsSync();
-    if (code != 0 || !gone) {
-      AppLog.instance.warning('Backend: delete "$trackPath" did not delete the file (code $code)');
+    if (code != 0) {
+      AppLog.instance.warning('Backend: delete "$trackPath" failed (code $code)');
+      return false;
+    }
+    // The reworked backend records the delete (table + changes.txt) but no
+    // longer removes the file itself, so remove it here if it's still there.
+    final file = File(p.join(musicPath, trackPath));
+    try {
+      if (file.existsSync()) file.deleteSync();
+    } catch (e, st) {
+      AppLog.instance.error('Backend: could not delete "$trackPath"', e, st);
       return false;
     }
     if (added.remove(trackPath)) await _saveAdded();
@@ -355,13 +363,19 @@ class Backend extends ChangeNotifier {
         // The other device or the server (after 60 s of relaying) hung up.
         syncMode = 'disconnected';
       }
-      // Songs going each way.
-      if (line.startsWith('file header:')) {
+      // Songs going each way. (Older backend messages first, then the
+      // reworked backend's: "Sending file x" / "Successfully recieved song x".)
+      if (line.startsWith('file header:') || line.startsWith('Sending file ')) {
         songsSent++;
       } else if (line.startsWith('DONE SENDING STUFF')) {
         doneSending = true;
-      } else if (line.startsWith('adding file ')) {
+      } else if (line.startsWith('adding file ') ||
+          line.startsWith('Successfully recieved song ')) {
         songsReceived++;
+        _filesChanged();
+      } else if (line.startsWith('Hashes dont match')) {
+        // A song arrived incomplete (the backend keeps the partial file).
+        AppLog.instance.warning('Backend: a received song was incomplete');
         _filesChanged();
       } else if (line.startsWith('renaming: ')) {
         songsRenamed++;
