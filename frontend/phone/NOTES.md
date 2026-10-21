@@ -1,7 +1,7 @@
 # NME Music: mobile app notes
 
 Flutter app for Android (iOS-ready, not built yet) in `frontend/phone`, branch
-`feat/mobile-ui-setup`. Version 1.2.0. Owner: Nedved (mobile). Backend: Emiliano
+`feat/mobile-ui-setup`. Version 1.3.0. Owner: Nedved (mobile). Backend: Emiliano
 (Zig, branch `backend`). Windows app: Mariano (`feat/window-ui-setup`).
 
 ## What the app does
