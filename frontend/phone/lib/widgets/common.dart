@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import '../services/backend.dart';
 import '../services/importer.dart';
 import '../services/library.dart';
+import '../services/player.dart';
 import '../services/playlists.dart';
 import '../services/stats.dart';
 import '../theme.dart';
@@ -293,6 +294,85 @@ Future<void> renameSongFile(BuildContext context, Track track) async {
   await Playlists.instance.renameTrack(track.id, newId);
   await Library.instance.scan();
   messenger.showSnackBar(SnackBar(content: Text('Renamed to $finalName')));
+}
+
+/// "Delete song" (Now Playing ⋯ menu and long-press on a song): asks first,
+/// then removes it from the queue, deletes the file, and drops its stats and
+/// playlist entries.
+Future<void> deleteSong(BuildContext context, Track track) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (c) => AlertDialog(
+      title: Text('Delete "${track.title}"?'),
+      content: const Text(
+          "The file is removed from this phone, along with its play count and "
+          "playlist entries. This can't be undone."),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+        FilledButton(
+          style: FilledButton.styleFrom(
+              backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+          onPressed: () => Navigator.pop(c, true),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+
+  // Out of the queue first, so the player isn't holding the file.
+  await Player.instance.removeTrack(track.id);
+  if (!await Library.instance.deleteTrack(track)) {
+    messenger.showSnackBar(
+        const SnackBar(content: Text('Delete failed. See Settings → Debug log')));
+    return;
+  }
+  Stats.instance.forgetTrack(track.id);
+  await Playlists.instance.forgetTrack(track.id);
+  messenger.showSnackBar(SnackBar(content: Text('Deleted ${track.title}')));
+}
+
+/// Long-press on a song: Add to playlist, Rename file, Delete song.
+void showSongActions(BuildContext context, Track track) {
+  showModalBottomSheet<void>(
+    context: context,
+    builder: (sheetContext) => SafeArea(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+          child: Text(track.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+        ),
+        ListTile(
+          leading: const Icon(Icons.playlist_add_rounded),
+          title: const Text('Add to playlist'),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            showAddToPlaylist(context, track);
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.drive_file_rename_outline_rounded),
+          title: const Text('Rename file'),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            renameSongFile(context, track);
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+          title: const Text('Delete song', style: TextStyle(color: Colors.redAccent)),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            deleteSong(context, track);
+          },
+        ),
+      ]),
+    ),
+  );
 }
 
 // ---- Text formatting helpers (covered by tests in test/widget_test.dart) ----

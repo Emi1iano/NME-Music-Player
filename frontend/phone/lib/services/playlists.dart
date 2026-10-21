@@ -90,6 +90,20 @@ class Playlists extends ChangeNotifier {
     if (changed) await _save();
   }
 
+  /// A song was deleted: take it out of every playlist.
+  Future<void> forgetTrack(String trackId) async {
+    var changed = false;
+    for (var i = 0; i < _items.length; i++) {
+      if (_items[i].trackIds.contains(trackId)) {
+        _items[i] = _items[i].copyWith(
+          trackIds: _items[i].trackIds.where((id) => id != trackId).toList(),
+        );
+        changed = true;
+      }
+    }
+    if (changed) await _save();
+  }
+
   /// Drag-to-reorder: take the track out at [from] and put it back at [to].
   Future<void> moveTrack(Playlist playlist, int from, int to) {
     final current = byId(playlist.id) ?? playlist;

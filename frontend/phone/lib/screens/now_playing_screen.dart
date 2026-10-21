@@ -165,6 +165,14 @@ class _TitleRow extends StatelessWidget {
               _showInfo(context, track);
             },
           ),
+          ListTile(
+            leading: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+            title: const Text('Delete song', style: TextStyle(color: Colors.redAccent)),
+            onTap: () {
+              Navigator.pop(sheetContext);
+              deleteSong(context, track);
+            },
+          ),
         ]),
       ),
     );

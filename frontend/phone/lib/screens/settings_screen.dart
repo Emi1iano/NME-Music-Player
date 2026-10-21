@@ -111,6 +111,27 @@ class SettingsScreen extends StatelessWidget {
                 );
               },
             ),
+            ListenableBuilder(
+              listenable: Backend.instance,
+              builder: (context, _) {
+                final backend = Backend.instance;
+                return ListTile(
+                  leading: const Icon(Icons.restart_alt_rounded),
+                  title: const Text('Reset sync data (testing)'),
+                  subtitle: Text(
+                    !backend.available
+                        ? 'Backend not loaded'
+                        : backend.isSyncing
+                            ? 'Not while a sync is running'
+                            : "Clears the backend's song table and pending changes, "
+                                'then adds every song again. Songs and key are kept',
+                    style: const TextStyle(color: AppColors.textSecondary),
+                  ),
+                  enabled: backend.available && !backend.isSyncing,
+                  onTap: () => _confirmTestReset(context),
+                );
+              },
+            ),
             const _Header('About'),
             // Version comes from pubspec.yaml (version: x.y.z+build).
             FutureBuilder<PackageInfo>(
@@ -131,6 +152,35 @@ class SettingsScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+/// "Reset sync data (testing)": runs the backend's `testreset`, then adds
+/// every song in the library to the backend again.
+Future<void> _confirmTestReset(BuildContext context) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (c) => AlertDialog(
+      title: const Text('Reset sync data?'),
+      content: const Text(
+          "For testing: empties the backend's song table, changes.txt and music "
+          'folder list, then adds every song again. Pending changes (like deletes '
+          'not synced yet) are lost. Your songs and sync key are kept.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Reset')),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  if (!await Backend.instance.testReset()) {
+    messenger.showSnackBar(
+        const SnackBar(content: Text('Reset failed. See Debug log')));
+    return;
+  }
+  await Backend.instance.registerNew(Library.instance.tracks.map((t) => t.id));
+  messenger.showSnackBar(SnackBar(
+      content: Text('Sync data reset: ${plural(Backend.instance.added.length, 'song')} added again')));
 }
 
 /// Settings → Sync: this device's key, songs sent to the backend, and the

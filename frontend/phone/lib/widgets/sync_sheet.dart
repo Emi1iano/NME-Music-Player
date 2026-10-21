@@ -150,6 +150,10 @@ class _SyncSheetState extends State<_SyncSheet> {
                 ]),
                 const SizedBox(height: 16),
                 _StatusRow(backend: backend),
+                if (_progress(backend) case final progress?) ...[
+                  const SizedBox(height: 8),
+                  Text(progress, style: const TextStyle(color: AppColors.textSecondary)),
+                ],
                 if (backend.syncLines.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   // The backend's own messages for this sync, newest last.
@@ -172,7 +176,7 @@ class _SyncSheetState extends State<_SyncSheet> {
                 ],
                 // Send a text message to the connected device (the backend
                 // sends each typed line to the other side).
-                if (backend.syncState == SyncState.paired) ...[
+                if (Backend.chatMode && backend.syncState == SyncState.paired) ...[
                   const SizedBox(height: 12),
                   Row(children: [
                     Expanded(
@@ -240,8 +244,8 @@ class _SyncSheetState extends State<_SyncSheet> {
                 ),
                 const Text(
                   'Experimental: both devices tap Sync now with the same key. Once '
-                  'connected you can send test messages; the connection stays open '
-                  'until you tap Cancel sync.',
+                  'connected, each side sends its new, renamed and deleted songs; '
+                  'the connection stays open until you tap Cancel sync.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
                 ),
@@ -252,6 +256,22 @@ class _SyncSheetState extends State<_SyncSheet> {
       ),
     );
   }
+}
+
+/// "Sent 3 songs • Received 2 songs" for the current sync, or null if
+/// nothing has moved yet.
+String? _progress(Backend b) {
+  String songs(int n) => n == 1 ? '1 song' : '$n songs';
+  final parts = [
+    if (b.songsSent > 0) 'Sent ${songs(b.songsSent)}',
+    if (b.songsReceived > 0) 'Received ${songs(b.songsReceived)}',
+    if (b.songsRenamed > 0) '${songs(b.songsRenamed)} renamed',
+    if (b.songsDeleted > 0) '${songs(b.songsDeleted)} deleted',
+  ];
+  if (b.doneSending && b.isSyncing) {
+    parts.add(b.songsSent == 0 ? 'Nothing new to send' : 'All sent');
+  }
+  return parts.isEmpty ? null : parts.join('  •  ');
 }
 
 /// One line saying where the sync is at, with an icon or spinner.

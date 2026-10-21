@@ -122,8 +122,8 @@ class _SongsScreenState extends State<SongsScreen> {
                 player.playTracks(tracks, index: i);
                 openNowPlaying(context);
               },
-              // Long-press: add to a playlist.
-              onLongPress: () => showAddToPlaylist(context, track),
+              // Long-press: Add to playlist / Rename / Delete.
+              onLongPress: () => showSongActions(context, track),
             );
           },
         ),

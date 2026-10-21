@@ -2,8 +2,8 @@
 # Builds the Zig backend (Emiliano's client in this repo) into the Android
 # libraries this app loads: android/app/src/main/jniLibs/<abi>/libbackend.so
 #
-# By default it compiles backend/NetworksButBetter/backend/src (his current
-# client). BACKEND_SRC=backend/client/src builds the older client instead.
+# By default it compiles backend/ (his current client, client.zig + api.zig).
+# BACKEND_SRC=<folder> builds another copy instead.
 # It compiles the source in THIS branch. To pick up newer
 # backend work, first merge Emiliano's branch into yours:
 #     git fetch origin && git merge origin/backend
@@ -25,7 +25,7 @@ API=29   # Android 10+: first version whose libc has __tls_get_addr
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="$(git -C "$APP_DIR" rev-parse --show-toplevel)"
-SRC="$REPO/${BACKEND_SRC:-backend/NetworksButBetter/backend/src}"
+SRC="$REPO/${BACKEND_SRC:-backend}"
 SDK="${ANDROID_HOME:-${LOCALAPPDATA:-$HOME}/Android/Sdk}"
 NDK="$(ls -d "$SDK"/ndk/* | sort -V | tail -1)"
 SYSROOT="$(ls -d "$NDK"/toolchains/llvm/prebuilt/*/sysroot | head -1)"

@@ -132,6 +132,17 @@ class Player {
     audio.play();
   }
 
+  /// Takes a deleted song out of the queue (it skips ahead if it was
+  /// playing). Stops the player if nothing is left.
+  Future<void> removeTrack(String trackId) async {
+    for (var i = _queue.length - 1; i >= 0; i--) {
+      if (_queue[i].id != trackId) continue;
+      _queue.removeAt(i);
+      await audio.removeAudioSourceAt(i);
+    }
+    if (_queue.isEmpty) await audio.stop();
+  }
+
   /// The big play/pause button.
   Future<void> togglePlay() async => audio.playing ? audio.pause() : audio.play();
 

@@ -48,7 +48,7 @@ class Library extends ChangeNotifier {
   static final Library instance = Library._();
 
   late String baseDir;       // The app's data folder (holds app/ for the backend)
-  late Directory musicDir;   // Where the user puts their songs: <baseDir>/app/music
+  late Directory musicDir;   // The songs: the backend's music folder (<baseDir>/testing/app/music)
   late Directory _artDir;    // Where we cache cover images pulled out of the files
 
   // The data the screens show.
@@ -99,20 +99,22 @@ class Library extends ChangeNotifier {
   /// Runs once at startup: finds/creates the Music folder and loads the
   /// saved sort choice.
   Future<void> init() async {
-    // Android: /storage/emulated/0/Android/data/<app id>/files/music
+    // Android: /storage/emulated/0/Android/data/<app id>/files/testing/app/music
     //   (reachable from a PC over USB).
-    // iOS: <app>/Documents/music (visible in the Files app).
-    // "music" next to the backend's own files is the layout Emiliano's
-    // backend expects.
+    // iOS: <app>/Documents/testing/app/music (visible in the Files app).
+    // The songs live in the backend's own music folder, so Emiliano's
+    // backend and the app see the same files.
     final base = Platform.isAndroid
         ? (await getExternalStorageDirectory() ??
             await getApplicationDocumentsDirectory())
         : await getApplicationDocumentsDirectory();
     baseDir = base.path;
-    musicDir = Directory(p.join(baseDir, 'music'));
+    musicDir = Directory(Backend.musicFolderIn(baseDir));
     await musicDir.create(recursive: true);
-    await _moveOldMusicFolder();
+    await _moveOldMusicFolders();
     await _checkWritable();
+    // Songs the other device sends, renames or deletes during a sync.
+    Backend.instance.onFilesChanged = scan;
 
     _artDir = Directory(p.join((await getApplicationCacheDirectory()).path, 'art'));
     await _artDir.create(recursive: true);
@@ -123,24 +125,31 @@ class Library extends ChangeNotifier {
     _sortMode = SortMode.values[saved.clamp(0, SortMode.values.length - 1)];
   }
 
-  /// Version 1.2 kept songs in `baseDir/app/music` (the old backend's
-  /// layout). Move them into `baseDir/music` so nobody's library disappears
-  /// after updating.
-  Future<void> _moveOldMusicFolder() async {
-    final old = Directory(p.join(baseDir, 'app', 'music'));
-    if (!await old.exists()) return;
-    var moved = 0;
-    try {
-      await for (final entity in old.list()) {
-        final target = p.join(musicDir.path, p.basename(entity.path));
-        if (await FileSystemEntity.type(target) != FileSystemEntityType.notFound) continue;
-        await entity.rename(target);
-        moved++;
+  /// Older versions kept songs in `baseDir/music` (and 1.2 in
+  /// `baseDir/app/music`); the backend now keeps them in its own folder.
+  /// Move them over so nobody's library disappears after updating.
+  Future<void> _moveOldMusicFolders() async {
+    final olds = {
+      p.join(baseDir, 'music'),
+      p.join(baseDir, 'app', 'music'),
+      p.join(baseDir, 'testing', 'app', 'music'),
+    }..remove(musicDir.path);
+    for (final path in olds) {
+      final old = Directory(path);
+      if (!await old.exists()) continue;
+      var moved = 0;
+      try {
+        await for (final entity in old.list()) {
+          final target = p.join(musicDir.path, p.basename(entity.path));
+          if (await FileSystemEntity.type(target) != FileSystemEntityType.notFound) continue;
+          await entity.rename(target);
+          moved++;
+        }
+        if (await old.list().isEmpty) await old.delete();
+        AppLog.instance.info('Moved $moved item(s) from $path to the music folder');
+      } catch (e, st) {
+        AppLog.instance.error('Could not move the old music folder $path', e, st);
       }
-      if (await old.list().isEmpty) await old.delete();
-      AppLog.instance.info('Moved $moved item(s) from app/music to the music folder');
-    } catch (e, st) {
-      AppLog.instance.error('Could not move the old Music folder', e, st);
     }
   }
 
@@ -194,6 +203,30 @@ class Library extends ChangeNotifier {
       scanning = false;
       notifyListeners();
     }
+  }
+
+  /// Deletes a song, then rescans. Goes through the backend's `delete` when
+  /// it can, so the other device deletes it too at the next sync; otherwise
+  /// (no backend, a sync running, or spaces in the name) just deletes the
+  /// file here. Returns false if the file couldn't be deleted.
+  Future<bool> deleteTrack(Track track) async {
+    final backend = Backend.instance;
+    if (backend.available && !backend.isSyncing && !track.id.contains(' ') &&
+        backend.added.contains(track.id) && await backend.delete(track.id)) {
+      AppLog.instance.info('Deleted "${track.id}" (backend will tell the other device)');
+      await scan();
+      return true;
+    }
+    final file = File(p.join(musicDir.path, track.id));
+    try {
+      if (await file.exists()) await file.delete();
+    } catch (e, st) {
+      AppLog.instance.error('Could not delete "${track.id}"', e, st);
+      return false;
+    }
+    AppLog.instance.info('Deleted "${track.id}" on this phone only');
+    await scan();
+    return true;
   }
 
   /// Changes the Songs tab order and remembers the choice for next time.

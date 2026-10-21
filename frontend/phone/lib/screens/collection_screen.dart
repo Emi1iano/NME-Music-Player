@@ -76,7 +76,7 @@ class CollectionScreen extends StatelessWidget {
             if (showTrackNumbers) {
               return ListTile(
                 onTap: play,
-                onLongPress: () => showAddToPlaylist(context, track),
+                onLongPress: () => showSongActions(context, track),
                 leading: SizedBox(
                   width: 28,
                   child: Text('${track.trackNumber ?? i}',
@@ -98,7 +98,7 @@ class CollectionScreen extends StatelessWidget {
               track: track,
               isCurrent: isCurrent,
               onTap: play,
-              onLongPress: () => showAddToPlaylist(context, track),
+              onLongPress: () => showSongActions(context, track),
             );
           },
         ),

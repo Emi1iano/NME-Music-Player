@@ -92,6 +92,11 @@ class Stats extends ChangeNotifier {
     _changed();
   }
 
+  /// A song was deleted: drop its stats.
+  void forgetTrack(String trackId) {
+    if (_byTrack.remove(trackId) != null) _changed();
+  }
+
   /// Clears everything (the reset button on the Listening Stats screen).
   Future<void> reset() async {
     _byTrack.clear();

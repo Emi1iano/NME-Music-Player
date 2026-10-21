@@ -33,11 +33,12 @@ enum SyncState {
 /// The backend is a command-line style API: we send it a text command like
 /// "add Album/song.mp3" and it works with files under the current working
 /// folder (the app's data folder):
-///   music/               the songs (this is also the app's Music folder)
+///   testing/app/music/   the songs (this is also the app's Music folder)
 ///   testing/app/key.txt  this device's 8-digit sync key
-///                        (app/key.txt once the backend's TESTING flag is off)
+///   (app/... instead of testing/app/... once the backend's TESTING flag is off)
 ///
-/// Commands: add [path], rename [path] [newname], sync [key], sync_new_key.
+/// Commands: add [path], rename [path] [newname], delete [path], sync [key],
+/// sync_new_key. Paths are relative to the music folder.
 /// `sync` never returns (it keeps the connection open), so it runs in its own
 /// isolate; see startSync.
 class Backend extends ChangeNotifier {
@@ -46,7 +47,8 @@ class Backend extends ChangeNotifier {
   static final Backend instance = Backend._();
 
   static const _libName = 'libbackend.so';
-  static const _addedPrefsKey = 'backend_added_paths';
+  // v2: the backend before 2026-10 didn't really record `add`, so start over.
+  static const _addedPrefsKey = 'backend_added_paths_v2';
 
   bool available = false;   // true once libbackend.so loaded on this device
   String? unavailableReason;
@@ -58,7 +60,22 @@ class Backend extends ChangeNotifier {
   // shares files between commands, so two at once could corrupt them).
   Future<void> _queue = Future.value();
 
-  String get musicPath => p.join(baseDir, 'music');
+  // The backend's own folder inside baseDir: "testing/app" while
+  // TESTING = true in backend/client.zig, "app" once he turns it off.
+  static const appFolder = 'testing/app';
+
+  // CHAT_MODE in backend/client.zig: when true, a connected sync sends typed
+  // text messages instead of songs (the Sync panel then shows a message box).
+  static const chatMode = false;
+
+  /// Where the backend keeps songs, for a given data folder.
+  static String musicFolderIn(String baseDir) => p.join(baseDir, appFolder, 'music');
+
+  String get musicPath => musicFolderIn(baseDir);
+
+  /// Called when a sync changed songs on this phone (received, renamed or
+  /// deleted by the other device), so the library can rescan. Set by Library.
+  VoidCallback? onFilesChanged;
 
   // Where the backend keeps the key: testing/app/ while its TESTING flag is
   // on, app/ otherwise. The old backend used app/cache/.
@@ -165,6 +182,39 @@ class Backend extends ChangeNotifier {
     return true;
   }
 
+  /// `delete [path]`: deletes a song file and tells the other device to
+  /// delete it too at the next sync. Returns true only if the file is gone.
+  Future<bool> delete(String trackPath) async {
+    if (!_checkArg(trackPath, 'delete')) return false;
+    final code = await _run('delete $trackPath');
+    final gone = !File(p.join(musicPath, trackPath)).existsSync();
+    if (code != 0 || !gone) {
+      AppLog.instance.warning('Backend: delete "$trackPath" did not delete the file (code $code)');
+      return false;
+    }
+    if (added.remove(trackPath)) await _saveAdded();
+    notifyListeners();
+    return true;
+  }
+
+  /// `testreset` (for debugging): empties the backend's song table, its
+  /// changes.txt and its list of music folders. Song files and the key are
+  /// kept. Also forgets which songs the app already added, so the next scan
+  /// adds them all again.
+  Future<bool> testReset() async {
+    if (!available || isSyncing) return false;
+    final code = await _run('testreset');
+    if (code != 0) {
+      AppLog.instance.warning('Backend: testreset failed (code $code)');
+      return false;
+    }
+    added.clear();
+    await _saveAdded();
+    AppLog.instance.info('Backend: sync data reset (song table, changes, music folders)');
+    notifyListeners();
+    return true;
+  }
+
   /// `sync_new_key`: makes a new 8-digit key and saves it in the key file
   /// (the backend doesn't return it, so we read the file afterwards).
   Future<String?> generateNewKey() async {
@@ -191,6 +241,10 @@ class Backend extends ChangeNotifier {
   String? syncMode;              // "direct" or "through the server"
   DateTime? syncStartedAt;
   final List<String> syncLines = []; // the backend's messages during this sync
+  // What this sync has done so far (shown in the Sync panel).
+  int songsSent = 0, songsReceived = 0, songsRenamed = 0, songsDeleted = 0;
+  bool doneSending = false;          // we've sent all our changes
+  Timer? _rescanSoon;                // rescans shortly after the other device changes files
   Timer? _syncPoll;
 
   /// `sync`: sends this phone's key to the pairing server and waits for
@@ -218,6 +272,8 @@ class Backend extends ChangeNotifier {
     syncMode = null;
     _punchingDone = false;
     syncLines.clear();
+    songsSent = songsReceived = songsRenamed = songsDeleted = 0;
+    doneSending = false;
     syncStartedAt = DateTime.now();
     notifyListeners();
     _logBackendOutput(); // skip older output so the panel only shows this sync
@@ -243,6 +299,10 @@ class Backend extends ChangeNotifier {
               ? SyncState.noPartner
               : (code == 0 ? SyncState.finished : SyncState.failed);
       if (wasCancelling) AppLog.instance.info('Backend: sync cancelled');
+      if (songsReceived + songsRenamed + songsDeleted > 0) {
+        _rescanSoon?.cancel();
+        onFilesChanged?.call();
+      }
       notifyListeners();
     });
     try {
@@ -295,8 +355,31 @@ class Backend extends ChangeNotifier {
         // The other device or the server (after 60 s of relaying) hung up.
         syncMode = 'disconnected';
       }
+      // Songs going each way.
+      if (line.startsWith('file header:')) {
+        songsSent++;
+      } else if (line.startsWith('DONE SENDING STUFF')) {
+        doneSending = true;
+      } else if (line.startsWith('adding file ')) {
+        songsReceived++;
+        _filesChanged();
+      } else if (line.startsWith('renaming: ')) {
+        songsRenamed++;
+        _filesChanged();
+      } else if (line.startsWith('id to be deleted')) {
+        songsDeleted++;
+        _filesChanged();
+      }
     }
     notifyListeners();
+  }
+
+  /// The other device changed files on this phone: rescan the library a
+  /// couple of seconds later (by then the backend has finished writing, and
+  /// several songs in a row only cause one rescan).
+  void _filesChanged() {
+    _rescanSoon?.cancel();
+    _rescanSoon = Timer(const Duration(seconds: 2), () => onFilesChanged?.call());
   }
 
   // --------------------------------------------------------- cancelling sync
@@ -307,7 +390,7 @@ class Backend extends ChangeNotifier {
   DateTime? _cancelStarted;
 
   // The backend's "disconnect" message code (ClientCode.TERMINATE in
-  // backend/NetworksButBetter/backend/src/server.zig).
+  // backend/server.zig).
   static const _codeTerminate = 0x0A;
 
   /// Stops a running sync without closing the app.
