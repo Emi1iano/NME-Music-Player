@@ -348,12 +348,3 @@ fn print(io: Io, comptime fmt: []const u8, args: anytype) void {
     lock.unlock(io);
 }
 
-test "ClientConnection" {
-    const string1: []const u8 = &.{ 0x1, 192, 62, 0, 100, 0x12, 0x12, '1', '2', '3', '4', '5', '6', '7', '8' };
-    const string2: []const u8 = &.{ 0x2, 192, 62, 0, 100, 0x12, 0x12, '1', '2', '3', '4', '5', '6', '7', '9' };
-
-    const test1 = Networks.ClientConnection.init(string1[0..15].*, undefined);
-    std.debug.print("{any}\n", .{test1});
-    const test2 = Networks.ClientConnection.init(string2[0..15].*, undefined);
-    std.debug.print("{any}\n", .{test2});
-}

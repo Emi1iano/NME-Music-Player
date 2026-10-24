@@ -4,6 +4,13 @@ const builtin = @import("builtin");
 const ClientCode = @import("server.zig").Networks.ClientCode;
 const Io = std.Io;
 
+//TODO add stats - time and play count
+//TODO change the app so when deleteing a song it removes it first before later confirming if they actually want to delete
+//TODO when done sending data from both sides disconnect gracefully
+//TODO make transfering songs faster
+//TODO making sure the music tables are always the same on both devices
+//TODO maybe add some semi auto updating feature
+//TODO maybe update zig to 0.17
 const TESTING_RELAY: bool = false;
 const TESTING: bool = true;
 const CHAT_MODE: bool = false;
@@ -458,7 +465,7 @@ const Reliable = struct {
     const WINDOW = 512; // chunks in flight (~450 KB)
     const RTO_TICKS = 200; // timeout, in ~1ms sleep ticks
     const FAST_RETX_TICKS = 20; // min gap between fast retransmits of one chunk
-    const PACE = 32; // sleep 1ms after this many sends (avoids socket buffer overflow)
+    const PACE = 64; // sleep 1ms after this many sends (avoids socket buffer overflow)
     const STALL_TICKS = 10_000; // give up if no progress for ~10s
     const NEVER = std.math.maxInt(u64);
     const MAX_TRANSFER = 1 << 30;
@@ -675,6 +682,31 @@ const NewFileManager = struct {
         Rename,
         Delete,
     };
+    // const AllData = struct {
+    //     table: MusicTable,
+    //     paths: MusicPaths,
+    //     changes: Changes,
+    //     
+    //     const FileType = enum(u2) {
+    //         musictable,
+    //         musicpaths,
+    //         chnages,
+    //     };
+    //     fn init(io: Io, alloc: std.mem.Allocator) @This() {
+    //         return .{
+    //             .table = try MusicTable.init(io, alloc),
+    //             .paths = try MusicPaths.init(io, alloc),
+    //             .changes = try Changes.init(io, alloc),
+    //         };
+    //     }
+    //     fn deinit(self: *@This(), io: Io) void {
+    //         self.table.deinit(io);
+    //         self.paths.deinit(io);
+    //         self.changes.deinit(io);
+    //     }
+    //     fn parseAll(self: *@This(), io: Io, alloc: std.mem.Allocator) !void {
+    //     }
+    // };
     const Commands = struct {
         const Aux = struct {
             fn recurseDir(io: Io, dir: Io.Dir, table: *MusicTable, changes: *Changes) !void {
@@ -787,7 +819,7 @@ const NewFileManager = struct {
                 testPrint("{s} {s} with id: {d}\n", .{ action, entry.path, entry.id });
                 if (eql(action, "delete")) {
                     // FIXME
-                    // try Io.Dir.deleteFileAbsolute(io, entry.path);
+                    try Io.Dir.deleteFileAbsolute(io, entry.path);
                     // TODO if add 1 and delete 1 then cancel them out
                     // add id:1
                     // add id:2
