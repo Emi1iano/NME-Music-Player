@@ -12,6 +12,8 @@ dependencies:
   flutter:
     sdk: flutter
   google_fonts: ^6.2.1
+  media_kit: ^1.2.6
+  media_kit_libs_windows_audio: ^1.0.9
   shared_preferences: ^2.5.5
   # Add later, when you wire up real playback / networking:
   # just_audio: ^0.9.40        -> local audio playback

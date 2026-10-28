@@ -114,7 +114,7 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
                       ListTile(
                         contentPadding: EdgeInsets.zero,
                         title: Text(s.songByPath(p).title),
-                        onTap: () => s.play(s.songByPath(p)),
+                        onTap: () => s.play(s.songByPath(p), queue: [for (final t in tracks) s.songByPath(t)]),
                         trailing: IconButton(
                           icon: const Icon(Icons.close),
                           onPressed: () => s.removeFromPlaylist(cur, p),

@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
+import 'audio_api.dart';
 import 'sync_api.dart';
 
 class Store extends ChangeNotifier {
@@ -22,8 +23,35 @@ class Store extends ChangeNotifier {
   bool importing = false;
   Song? playing;
   bool paused = false;
+  bool ended = false; // the current song played to its end
+  List<Song> queue = const []; // what plays next: the library or a playlist
   Timer? _t;
   SharedPreferences? _p;
+  final _audio = AudioEngine();
+  StreamSubscription<bool>? _doneSub;
+  StreamSubscription<String>? _errSub;
+  double _heardSecs = 0; // time actually listened to the current song
+  bool _counted = false; // this listen already counted as a play
+
+  Store() {
+    _doneSub = _audio.completed.listen((done) {
+      if (done) _onFinished();
+    });
+    _errSub = _audio.errors.listen((e) {
+      if (playing == null) return;
+      status = 'Can\'t play ${playing!.title}: $e';
+      notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    _doneSub?.cancel();
+    _errSub?.cancel();
+    _audio.dispose();
+    super.dispose();
+  }
 
   Future<void> load() async {
     _p = await SharedPreferences.getInstance();
@@ -82,24 +110,90 @@ class Store extends ChangeNotifier {
       library.firstWhere((s) => s.path == path, orElse: () => Song(path, path));
 
   // ---- playback
-  void play(Song s) {
+  Duration get position => _audio.position;
+  Duration get duration => _audio.duration;
+
+  /// Plays [s]; [queue] is what follows it (defaults to the whole library).
+  /// A play only counts once at least half the song has really been heard.
+  void play(Song s, {List<Song>? queue}) {
+    this.queue = queue ?? List.of(library);
     playing = s;
     paused = false;
-    counts[s.path] = (counts[s.path] ?? 0) + 1;
+    ended = false;
+    _heardSecs = 0;
+    _counted = false;
     _t?.cancel();
-    _t = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (paused) return;
-      totalSecs++;
-      if (totalSecs % 10 == 0) _save();
+    _t = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    _audio.open('$folder/${s.path}').catchError((Object e) {
+      status = 'Can\'t play ${s.title}: $e';
       notifyListeners();
     });
+    notifyListeners();
+  }
+
+  /// Once a second: counts time that was actually played (not paused, not
+  /// skipped over with the slider) and counts the play at the halfway point.
+  void _tick() {
+    if (paused || ended || !_audio.playing) return;
+    totalSecs++;
+    _heardSecs++;
+    final total = _audio.duration.inMilliseconds / 1000;
+    final song = playing;
+    if (!_counted && song != null && total > 0 && _heardSecs >= total / 2) {
+      _counted = true;
+      counts[song.path] = (counts[song.path] ?? 0) + 1;
+      _save();
+    } else if (totalSecs % 10 == 0) {
+      _save();
+    }
+    notifyListeners();
+  }
+
+  void _onFinished() {
+    final song = playing;
+    if (song == null) return;
+    final i = queue.indexOf(song);
+    if (i >= 0 && i + 1 < queue.length) {
+      play(queue[i + 1], queue: queue);
+    } else {
+      ended = true;
+      paused = true;
+      notifyListeners();
+    }
+  }
+
+  void togglePause() {
+    final song = playing;
+    if (song == null) return;
+    if (ended) {
+      play(song, queue: queue); // the song finished: play it again
+      return;
+    }
+    paused = !paused;
+    paused ? _audio.pause() : _audio.resume();
     _save();
     notifyListeners();
   }
 
-  void togglePause() {
-    paused = !paused;
-    _save();
+  void next() {
+    final i = queue.indexOf(playing ?? const Song('', ''));
+    if (i >= 0 && i + 1 < queue.length) play(queue[i + 1], queue: queue);
+  }
+
+  /// Restarts the song if it's been playing for a few seconds, else goes back one.
+  void previous() {
+    final song = playing;
+    if (song == null) return;
+    final i = queue.indexOf(song);
+    if (_audio.position > const Duration(seconds: 3) || i <= 0) {
+      play(song, queue: queue);
+    } else {
+      play(queue[i - 1], queue: queue);
+    }
+  }
+
+  void seek(Duration to) {
+    _audio.seek(to);
     notifyListeners();
   }
 
@@ -143,6 +237,9 @@ class Store extends ChangeNotifier {
       _t?.cancel();
       playing = null;
       paused = false;
+      ended = false;
+      // Windows can't delete a file the player still has open.
+      await _audio.stop();
     }
     _save();
     notifyListeners();
@@ -183,7 +280,7 @@ class Store extends ChangeNotifier {
 
   void playPlaylist(String name) {
     final l = playlists[name];
-    if (l != null && l.isNotEmpty) play(songByPath(l.first));
+    if (l != null && l.isNotEmpty) play(songByPath(l.first), queue: [for (final p in l) songByPath(p)]);
   }
 
   // ---- sync
