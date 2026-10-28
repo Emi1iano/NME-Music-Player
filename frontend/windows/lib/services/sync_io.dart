@@ -94,7 +94,7 @@ class MusicSync {
       if (s != null && s != last) onStatus?.call(last = s);
     });
     try {
-      final rc = await Isolate.run(() => _call('sync $key'));
+      final rc = await _runInIsolate('sync $key');
       final s = _read('status.txt') ?? '';
       if (rc == 0) return s;
       return s.isEmpty ? 'Sync failed (backend error $rc)' : s;
@@ -134,6 +134,12 @@ class MusicSync {
       return null;
     }
   }
+
+  /// Runs the blocking backend call off the UI thread. The closure lives in
+  /// its own method so it captures only [command]: a closure made inside
+  /// sync() would drag along onStatus, the Timer and everything they
+  /// reference (Store, widgets), none of which can be sent to an isolate.
+  static Future<int> _runInIsolate(String command) => Isolate.run(() => _call(command));
 
   static int _call(String command) {
     final f = DynamicLibrary.open('backend.dll').lookupFunction<_Native, _Dart>('clientAPI');
