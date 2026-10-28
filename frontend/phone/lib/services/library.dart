@@ -207,11 +207,11 @@ class Library extends ChangeNotifier {
 
   /// Deletes a song, then rescans. Goes through the backend's `delete` when
   /// it can, so the other device deletes it too at the next sync; otherwise
-  /// (no backend, a sync running, or spaces in the name) just deletes the
+  /// (no backend, or a sync running) just deletes the
   /// file here. Returns false if the file couldn't be deleted.
   Future<bool> deleteTrack(Track track) async {
     final backend = Backend.instance;
-    if (backend.available && !backend.isSyncing && !track.id.contains(' ') &&
+    if (backend.available && !backend.isSyncing &&
         backend.added.contains(track.id) && await backend.delete(track.id)) {
       AppLog.instance.info('Deleted "${track.id}" (backend will tell the other device)');
       await scan();

@@ -14,7 +14,7 @@ int32_t clientAPI(const char* command); // 0 = ok, -1 = error
 | `armeabi-v7a/` | older 32-bit phones |
 | `x86_64/` | the Android emulator |
 
-**Built from:** `backend` in this branch (last source change `5e2225a`) on 2026-10-21 with Zig 0.16.0,
+**Built from:** `backend` in this branch (last source change `3d42be4`) on 2026-10-28 with Zig 0.17.0,
 
 ## Updating after backend changes
 

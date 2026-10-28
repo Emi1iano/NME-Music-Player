@@ -146,7 +146,7 @@ class Backend extends ChangeNotifier {
   /// [trackPath] is relative to the Music folder, e.g. "Album/song.mp3".
   Future<bool> add(String trackPath) async {
     if (!_checkArg(trackPath, 'add')) return false;
-    final code = await _run('add $trackPath');
+    final code = await _run('add ${_quote(trackPath)}');
     if (code != 0) return false;
     added.add(trackPath);
     await _saveAdded();
@@ -164,7 +164,7 @@ class Backend extends ChangeNotifier {
       AppLog.instance.warning('Backend: new name "$newName" must not contain a folder');
       return false;
     }
-    final code = await _run('rename $trackPath $newName');
+    final code = await _run('rename ${_quote(trackPath)} ${_quote(newName)}');
     final folder = p.posix.dirname(trackPath);
     final newPath = folder == '.' ? newName : '$folder/$newName';
     final moved = File(p.join(musicPath, newPath)).existsSync() &&
@@ -186,7 +186,7 @@ class Backend extends ChangeNotifier {
   /// delete it too at the next sync. Returns true only if the file is gone.
   Future<bool> delete(String trackPath) async {
     if (!_checkArg(trackPath, 'delete')) return false;
-    final code = await _run('delete $trackPath');
+    final code = await _run('delete ${_quote(trackPath)}');
     if (code != 0) {
       AppLog.instance.warning('Backend: delete "$trackPath" failed (code $code)');
       return false;
@@ -542,14 +542,13 @@ class Backend extends ChangeNotifier {
   }
 
   /// Calls `add` for every song not sent to the backend yet (after each
-  /// library scan). Songs with spaces in their path are skipped for now.
+  /// library scan).
   Future<void> registerNew(Iterable<String> trackPaths) async {
     if (!available || isSyncing) return;
     final missing = trackPaths.where((t) => !added.contains(t)).toList();
     if (missing.isEmpty) return;
-    final withSpaces = missing.where((t) => t.contains(' ')).length;
     var ok = 0, failed = 0;
-    for (final path in missing.where((t) => !t.contains(' '))) {
+    for (final path in missing) {
       if (await add(path)) {
         ok++;
       } else {
@@ -557,8 +556,7 @@ class Backend extends ChangeNotifier {
       }
     }
     AppLog.instance.info('Backend: added $ok new song(s)'
-        '${failed > 0 ? ', $failed failed' : ''}'
-        '${withSpaces > 0 ? ', $withSpaces skipped (spaces in file name)' : ''}');
+        '${failed > 0 ? ', $failed failed' : ''}');
   }
 
   Future<void> _saveAdded() async =>
@@ -589,18 +587,19 @@ class Backend extends ChangeNotifier {
 
   // ------------------------------------------------------------- internals
 
-  /// The backend splits commands on spaces, so a path or name with a space
-  /// would be read as two separate arguments. Refuse instead of sending a
-  /// command that would do the wrong thing.
   bool _checkArg(String value, String command) {
     if (!available) return false;
-    if (value.trim().isEmpty || value.contains(' ')) {
-      AppLog.instance.warning('Backend: can\'t $command "$value": the backend '
-          'doesn\'t support spaces in file names yet');
+    if (value.trim().isEmpty) {
+      AppLog.instance.warning('Backend: can\'t $command an empty path');
       return false;
     }
     return true;
   }
+
+  /// Puts one command argument in double quotes, so the backend reads a path
+  /// with spaces as ONE argument ("Cry for you.opus"). A `"` inside the name
+  /// is sent as `\"`, which the backend's parser turns back into `"`.
+  static String _quote(String value) => '"${value.replaceAll('"', r'\"')}"';
 
   /// Runs one command in a background isolate (so the UI never freezes) and
   /// returns the backend's exit code. Commands run one at a time.

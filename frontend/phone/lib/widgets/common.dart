@@ -239,13 +239,6 @@ Future<void> renameSongFile(BuildContext context, Track track) async {
         content: Text(backend.unavailableReason ?? 'Backend not available')));
     return;
   }
-  // The backend splits commands on spaces, so these files can't be renamed yet.
-  if (track.id.contains(' ')) {
-    messenger.showSnackBar(const SnackBar(
-        content: Text("Can't rename files with spaces in the name yet (backend limitation)")));
-    return;
-  }
-
   final oldName = p.posix.basename(track.id);
   final ext = p.extension(oldName);
   final controller = TextEditingController(text: oldName);
@@ -258,7 +251,7 @@ Future<void> renameSongFile(BuildContext context, Track track) async {
           controller: controller,
           autofocus: true,
           decoration: const InputDecoration(
-            helperText: 'No spaces (use - or _). Stays in the same folder.',
+            helperText: 'Stays in the same folder.',
           ),
           onSubmitted: (v) => Navigator.pop(c, v.trim()),
         ),
@@ -276,9 +269,9 @@ Future<void> renameSongFile(BuildContext context, Track track) async {
   // Keep the song's extension, or the library would stop seeing it as music.
   final finalName =
       p.extension(newName).toLowerCase() == ext.toLowerCase() ? newName : '$newName$ext';
-  if (finalName.contains(' ') || finalName.contains('/')) {
+  if (finalName.contains('/') || finalName.contains(r'')) {
     messenger.showSnackBar(
-        const SnackBar(content: Text('Use a name without spaces or slashes')));
+        const SnackBar(content: Text('Use a name without slashes')));
     return;
   }
 

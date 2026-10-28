@@ -15,11 +15,11 @@
 # with `-lc --libc`. Once build.zig does the same, this script can go back to
 # `zig build all`.
 #
-# Needs: Zig 0.16.0 (ZIG=path/to/zig to override), Android NDK.
+# Needs: Zig 0.17.0 (ZIG=path/to/zig to override), Android NDK.
 # Usage (from frontend/phone):  bash tool/build_backend.sh
 set -euo pipefail
 
-ZIG="${ZIG:-$HOME/.zvm/0.16.0/zig.exe}"
+ZIG="${ZIG:-$HOME/.zvm/0.17.0/zig.exe}"
 [ -x "$ZIG" ] || ZIG="$(command -v zig)"
 API=29   # Android 10+: first version whose libc has __tls_get_addr
 
@@ -51,7 +51,8 @@ sys_include_dir=$SYSROOT/usr/include/$NDKLIB
 crt_dir=$SYSROOT/usr/lib/$NDKLIB/$API
 msvc_lib_dir=
 kernel32_lib_dir=
-gcc_dir=
+cc_dir=$SYSROOT/usr/lib/$NDKLIB/$API
+darwin_sdk_dir=
 EOF
   OUT="$APP_DIR/android/app/src/main/jniLibs/$ABI"
   mkdir -p "$OUT"
