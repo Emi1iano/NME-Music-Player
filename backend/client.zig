@@ -603,10 +603,25 @@ const Syncing = struct {
         defer arena.deinit();
         const alloc = arena.allocator();
 
+        // Older versions of the app (e.g. the phone's) don't know these messages:
+        // they never answer the song list. Then we just send everything and wait
+        // for the other device to go quiet instead of for its "done".
+        var older_peer = false;
         const have = try Control.collectHave(io, alloc);
-        try Reliable.send(io, alloc, Control.ACTION_HAVE, have);
-        try Control.waitForPeer(io, .have);
+        Reliable.sendWithin(io, alloc, Control.ACTION_HAVE, have, Control.handshake_limit_ms) catch |err| switch (err) {
+            error.PeerUnresponsive => older_peer = true,
+            else => return err,
+        };
+        if (older_peer) {
+            testPrint("No answer to the song list: treating the other device as an older version\n", .{});
+        } else {
+            try Control.waitForPeer(io, .have);
+        }
         try send(io);
+        if (older_peer) {
+            Status.set(io, "Waiting for the other device to finish...", .{});
+            return Control.waitForQuiet(io);
+        }
 
         Reliable.send(io, alloc, Control.ACTION_DONE, "DONE") catch |err| {
             // The other device may leave as soon as it got its copy.
@@ -621,6 +636,8 @@ const Syncing = struct {
         const ACTION_DONE = 3;
         const ACTION_HAVE = 4;
         const silence_limit_s = 20;
+        const handshake_limit_ms = 3000; // no ack of the song list within this: an older peer
+        const quiet_s = 5; // older peer: done once it's been silent this long
         const have_limit_s = 60;
         const alloc = std.heap.smp_allocator;
 
@@ -689,6 +706,17 @@ const Syncing = struct {
             if (last.untilNow(io, .awake).toSeconds() >= silence_limit_s) {
                 Status.set(io, "Lost connection to the other device", .{});
                 return error.LostConnection;
+            }
+        }
+        /// For an older peer that never says "done": waits until it has sent nothing for a while.
+        fn waitForQuiet(io: Io) !void {
+            while (true) {
+                if (clientState.should_disconnect) return error.Disconnected;
+                state_lock.lockUncancelable(io);
+                const last = last_heard;
+                state_lock.unlock(io);
+                if (last.untilNow(io, .awake).toSeconds() >= quiet_s) return;
+                try io.sleep(.fromMilliseconds(100), .awake);
             }
         }
         fn waitForPeer(io: Io, which: Flag) !void {
@@ -765,7 +793,8 @@ const Reliable = struct {
     const RTO_TICKS = 200; // timeout, in ~1ms sleep ticks
     const FAST_RETX_TICKS = 20; // min gap between fast retransmits of one chunk
     const PACE = 64; // sleep 1ms after this many sends (avoids socket buffer overflow)
-    const STALL_TICKS = 10_000; // give up if no progress for ~10s
+    // Real time, not ticks: on Windows a 1 ms sleep takes ~15 ms, so counting ticks was ~15x too long.
+    const STALL_MS = 10_000; // give up if no progress for 10 s
     const NEVER = std.math.maxInt(u64);
     const MAX_TRANSFER = 1 << 30;
 
@@ -819,6 +848,10 @@ const Reliable = struct {
     /// Reliably deliver `blob`. Blocks until fully acked.
     /// Must run in a different task than the listen loop (which feeds onAck).
     pub fn send(io: Io, alloc: std.mem.Allocator, action: u8, blob: []const u8) !void {
+        return sendWithin(io, alloc, action, blob, STALL_MS);
+    }
+    /// Like `send`, but gives up after `stall_ms` milliseconds without progress.
+    pub fn sendWithin(io: Io, alloc: std.mem.Allocator, action: u8, blob: []const u8, stall_ms: i64) !void {
         const n: usize = @max(1, (blob.len + CHUNK - 1) / CHUNK);
         const acked = try alloc.alloc(u8, n);
         defer alloc.free(acked);
@@ -836,15 +869,15 @@ const Reliable = struct {
         var base: usize = 0;
         var tick: u64 = 0;
         var burst: usize = 0;
-        var stall: u64 = 0;
+        var progress_at = Io.Timestamp.now(io, .awake);
 
         while (true) {
             const old_base = base;
             while (base < n and @atomicLoad(u8, &acked[base], .acquire) == 1) base += 1;
             if (base == n) return;
             if (clientState.should_disconnect) return error.Disconnected;
-            if (base != old_base) stall = 0 else stall += 1;
-            if (stall > STALL_TICKS) return error.PeerUnresponsive;
+            if (base != old_base) progress_at = Io.Timestamp.now(io, .awake);
+            if (progress_at.untilNow(io, .awake).toMilliseconds() > stall_ms) return error.PeerUnresponsive;
 
             const hi_end = tx.highest_end.load(.acquire);
             const end = @min(n, base + WINDOW);
