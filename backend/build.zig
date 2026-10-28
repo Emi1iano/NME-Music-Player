@@ -53,9 +53,7 @@ pub fn build(b: *std.Build) void {
     server_cmd.step.dependOn(b.getInstallStep());
     client_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| {
-        client_cmd.addArgs(args);
-    }
+    client_cmd.addPassthruArgs();
 
     const all = b.step("all", "Build all native libraries");
     for (targets) |system| {

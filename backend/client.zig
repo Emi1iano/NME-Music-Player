@@ -4,6 +4,13 @@ const builtin = @import("builtin");
 const ClientCode = @import("server.zig").Networks.ClientCode;
 const Io = std.Io;
 
+//TODO add stats - time and play count
+//TODO change the app so when deleteing a song it removes it first before later confirming if they actually want to delete
+//TODO when done sending data from both sides disconnect gracefully
+//TODO make transfering songs faster
+//TODO making sure the music tables are always the same on both devices
+//TODO maybe add some semi auto updating feature
+//TODO maybe update zig to 0.17
 const TESTING_RELAY: bool = false;
 const TESTING: bool = true;
 const CHAT_MODE: bool = false;
@@ -350,7 +357,7 @@ const Networks = struct {
                 return result;
             }
             fn ipToBuf(ip: [4]u8, port: u16) [6]u8 {
-                var result: [6]u8 = [_]u8{0} ** 6;
+                var result: [6]u8 = @splat(0);
                 @memcpy(result[0..4], &ip);
 
                 result[4] |= @truncate(port >> 8);
@@ -458,7 +465,7 @@ const Reliable = struct {
     const WINDOW = 512; // chunks in flight (~450 KB)
     const RTO_TICKS = 200; // timeout, in ~1ms sleep ticks
     const FAST_RETX_TICKS = 20; // min gap between fast retransmits of one chunk
-    const PACE = 32; // sleep 1ms after this many sends (avoids socket buffer overflow)
+    const PACE = 64; // sleep 1ms after this many sends (avoids socket buffer overflow)
     const STALL_TICKS = 10_000; // give up if no progress for ~10s
     const NEVER = std.math.maxInt(u64);
     const MAX_TRANSFER = 1 << 30;
@@ -675,6 +682,31 @@ const NewFileManager = struct {
         Rename,
         Delete,
     };
+    // const AllData = struct {
+    //     table: MusicTable,
+    //     paths: MusicPaths,
+    //     changes: Changes,
+    //     
+    //     const FileType = enum(u2) {
+    //         musictable,
+    //         musicpaths,
+    //         chnages,
+    //     };
+    //     fn init(io: Io, alloc: std.mem.Allocator) @This() {
+    //         return .{
+    //             .table = try MusicTable.init(io, alloc),
+    //             .paths = try MusicPaths.init(io, alloc),
+    //             .changes = try Changes.init(io, alloc),
+    //         };
+    //     }
+    //     fn deinit(self: *@This(), io: Io) void {
+    //         self.table.deinit(io);
+    //         self.paths.deinit(io);
+    //         self.changes.deinit(io);
+    //     }
+    //     fn parseAll(self: *@This(), io: Io, alloc: std.mem.Allocator) !void {
+    //     }
+    // };
     const Commands = struct {
         const Aux = struct {
             fn recurseDir(io: Io, dir: Io.Dir, table: *MusicTable, changes: *Changes) !void {
@@ -787,7 +819,7 @@ const NewFileManager = struct {
                 testPrint("{s} {s} with id: {d}\n", .{ action, entry.path, entry.id });
                 if (eql(action, "delete")) {
                     // FIXME
-                    // try Io.Dir.deleteFileAbsolute(io, entry.path);
+                    try Io.Dir.deleteFileAbsolute(io, entry.path);
                     // TODO if add 1 and delete 1 then cancel them out
                     // add id:1
                     // add id:2
@@ -1214,25 +1246,25 @@ fn MyFile(comptime T: type, comptime format: []const u8, parse_rules: anytype) t
             const data = try fr.interface.allocRemaining(self.alloc, .unlimited);
             var r = Io.Reader.fixed(data);
 
-            const fields = @typeInfo(T).@"struct".fields;
-            const parse_fields = @typeInfo(@TypeOf(parse_rules)).@"struct".fields;
-            comptime std.debug.assert(fields.len == parse_fields.len);
+            const fields = @typeInfo(T).@"struct";
+            const parse_fields = @typeInfo(@TypeOf(parse_rules)).@"struct";
+            comptime std.debug.assert(fields.field_names.len == parse_fields.field_names.len);
 
             while (r.seek < r.end) {
                 var item: T = undefined;
-                inline for (parse_fields, fields) |pf, f| {
-                    const rule = @field(parse_rules, pf.name);
+                inline for (parse_fields.field_types, parse_fields.field_names, fields.field_types, fields.field_names) |pt, pn, ft, fn_| {
+                    const rule = @field(parse_rules, pn);
 
-                    const chunk: []const u8 = switch (pf.type) {
+                    const chunk: []const u8 = switch (pt) {
                         u8 => (try r.takeDelimiter(rule)) orelse return error.EndOfStream,
                         comptime_int => try r.take(rule),
-                        else => @compileError("type not supported: " ++ @typeName(pf.type)),
+                        else => @compileError("type not supported: " ++ @typeName(pt)),
                     };
 
-                    @field(item, f.name) = switch (f.type) {
+                    @field(item, fn_) = switch (ft) {
                         usize => stringToNum(chunk),
                         []const u8 => chunk,
-                        else => @compileError("field not supported: " ++ @typeName(f.type)),
+                        else => @compileError("field not supported: " ++ @typeName(ft)),
                     };
                 }
                 try self.list.append(item);
@@ -1297,23 +1329,23 @@ fn MySend(io: Io, comptime code: ClientCode, args: anytype) !void {
         .Relay => try std.fmt.bufPrint(buf[0..], "{s}{s}{s}", .{ ClientCode.getByte(.RELAY), clientState.key, ClientCode.getByte(code) }),
     };
     const typeinfo = @typeInfo(@TypeOf(args));
-    const fields = typeinfo.@"struct".fields;
+    const fields = typeinfo.@"struct";
 
-    if (fields.len == 0) {
+    if (fields.field_names.len == 0) {
         try clientState.sendResolved(io, buf[0..header.len]);
     }
-    inline for (fields) |f| {
-        const data: []const u8 = switch (@typeInfo(f.type)) {
+    inline for (fields.field_types, fields.field_names) |ft, fn_| {
+        const data: []const u8 = switch (@typeInfo(ft)) {
             .pointer => |p| blk: switch (p.size) {
-                .many => if (p.sentinel() != null) break :blk std.mem.span(@field(args, f.name)),
-                .slice => break :blk @field(args, f.name),
+                .many => if (p.sentinel() != null) break :blk std.mem.span(@field(args, fn_)),
+                .slice => break :blk @field(args, fn_),
                 .one => switch (@typeInfo(p.child)) {
-                    .array => |a| if (a.child == u8) break :blk @field(args, f.name),
+                    .array => |a| if (a.child == u8) break :blk @field(args, fn_),
                     else => {},
                 },
-                else => @compileError("arg not supported: " ++ @typeName(f.type)),
+                else => @compileError("arg not supported: " ++ @typeName(ft)),
             },
-            else => @compileError("arg not supported: " ++ @typeName(f.type)),
+            else => @compileError("arg not supported: " ++ @typeName(ft)),
         };
         var r = Io.Reader.fixed(data);
         while (r.seek < r.end) {
