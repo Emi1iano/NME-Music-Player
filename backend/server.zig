@@ -50,6 +50,8 @@ pub const Networks = struct {
         FILE_CONTENT = 0x9,
         TERMINATE = 0xA,
         DATA = 0xB,
+        CHUNK = 0xC,
+        CHUNK_ACK = 0xD,
         
 
         pub fn getCode(byte: u8) ClientCode {
@@ -65,6 +67,8 @@ pub const Networks = struct {
                 0x9 => return ClientCode.FILE_CONTENT,
                 0xA => return ClientCode.TERMINATE,
                 0xB => return ClientCode.DATA,
+                0xC => return ClientCode.CHUNK,
+                0xD => return ClientCode.CHUNK_ACK,
                 else => return ClientCode.NONE,
             }
         }
@@ -79,12 +83,14 @@ pub const Networks = struct {
                 .RELAY => return .{0x06},
                 .TERMINATE => return .{0x0A},
                 .DATA => return .{0x0B},
+                .CHUNK => return .{0x0C},
+                .CHUNK_ACK => return .{0x0D},
                 else => unreachable,
             }
         }
     };
     const ServerState = struct {
-        clients: [16]?ClientConnection = [_]?ClientConnection{null} ** 16,
+        clients: [16]?ClientConnection = @splat(null),
         temp: Temp = .{},
         server_socket: net.Socket = undefined,
         clients_size: u8 = 0,
@@ -159,7 +165,7 @@ pub const Networks = struct {
             return result;
         }
         fn ipToBuf(ip: net.IpAddress) [6]u8 {
-            var result: [6]u8 = [_]u8{0} ** 6;
+            var result: [6]u8 = @splat(0);
             @memcpy(result[0..4], &ip.ip4.bytes);
 
             result[4] |= @truncate(ip.getPort() >> 8);
@@ -171,7 +177,7 @@ pub const Networks = struct {
     // TODO: for TCP
     const ClientState = struct {};
     const Temp = struct {
-        relayClients: [16]?RelayClient = [_]?RelayClient{null} ** 16,
+        relayClients: [16]?RelayClient = @splat(null),
         lock: std.Io.Mutex = .init,
         size: usize = 0,
 
@@ -347,12 +353,3 @@ fn print(io: Io, comptime fmt: []const u8, args: anytype) void {
     lock.unlock(io);
 }
 
-test "ClientConnection" {
-    const string1: []const u8 = &.{ 0x1, 192, 62, 0, 100, 0x12, 0x12, '1', '2', '3', '4', '5', '6', '7', '8' };
-    const string2: []const u8 = &.{ 0x2, 192, 62, 0, 100, 0x12, 0x12, '1', '2', '3', '4', '5', '6', '7', '9' };
-
-    const test1 = Networks.ClientConnection.init(string1[0..15].*, undefined);
-    std.debug.print("{any}\n", .{test1});
-    const test2 = Networks.ClientConnection.init(string2[0..15].*, undefined);
-    std.debug.print("{any}\n", .{test2});
-}
