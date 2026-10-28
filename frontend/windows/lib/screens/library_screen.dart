@@ -1,6 +1,8 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../models/models.dart';
 import '../services/store.dart';
+import '../services/sync_api.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass.dart';
 
@@ -29,15 +31,60 @@ class LibraryScreen extends StatelessWidget {
     if (ok == true) s.deleteSong(song);
   }
 
+  /// Lets the user pick song files (or a whole folder) and copies them into
+  /// the music folder.
+  Future<void> _import(BuildContext c, {required bool wholeFolder}) async {
+    final messenger = ScaffoldMessenger.of(c);
+    void say(String m) => messenger.showSnackBar(SnackBar(content: Text(m)));
+    if (!MusicSync.supported) {
+      say('Importing music is only available in the Windows app');
+      return;
+    }
+    final List<String> paths;
+    if (wholeFolder) {
+      final dir = await FilePicker.getDirectoryPath(dialogTitle: 'Choose a folder with music');
+      if (dir == null) return;
+      paths = await MusicSync.audioFilesIn(dir);
+      if (paths.isEmpty) {
+        say('No audio files found in that folder');
+        return;
+      }
+    } else {
+      final picked = await FilePicker.pickFiles(
+        dialogTitle: 'Choose songs to import',
+        type: FileType.custom,
+        allowedExtensions: MusicSync.audioExtensions,
+      );
+      paths = [for (final f in picked) if (f.path != null) f.path!];
+      if (paths.isEmpty) return;
+    }
+    say(await s.importSongs(paths));
+  }
+
   @override
   Widget build(BuildContext c) => Glass(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Library', style: Theme.of(c).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w600)),
+          Row(children: [
+            Expanded(
+              child: Text('Library', style: Theme.of(c).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w600)),
+            ),
+            OutlinedButton.icon(
+              onPressed: s.importing ? null : () => _import(c, wholeFolder: true),
+              icon: const Icon(Icons.folder_open, size: 18),
+              label: const Text('Import folder'),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: s.importing ? null : () => _import(c, wholeFolder: false),
+              icon: const Icon(Icons.library_add, size: 18),
+              label: Text(s.importing ? 'Importing...' : 'Import music'),
+            ),
+          ]),
           const SizedBox(height: 12),
           Expanded(
             child: s.library.isEmpty
                 ? Center(
-                    child: Text('No songs yet. Put audio files in\n${s.folder}\nor sync with another device.',
+                    child: Text('No songs yet. Use "Import music" above,\nput audio files in ${s.folder},\nor sync with another device.',
                         textAlign: TextAlign.center),
                   )
                 : ListView.separated(

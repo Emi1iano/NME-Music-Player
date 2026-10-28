@@ -31,6 +31,9 @@ class MusicSync {
     return p.split('/').every((s) => s.isNotEmpty && s != '.' && s != '..');
   }
 
+  /// File extensions (no dot) the app treats as songs, for file pickers.
+  static List<String> get audioExtensions => [for (final e in _audio) e.substring(1)];
+
   static bool _isAudio(String p) {
     final dot = p.lastIndexOf('.');
     return dot >= 0 && _audio.contains(p.substring(dot).toLowerCase());
@@ -47,6 +50,51 @@ class MusicSync {
       if (_isAudio(rel) && isSafeRelPath(rel)) out.add(rel);
     }
     return out..sort();
+  }
+
+  /// Audio files under [dir], as full paths.
+  static Future<List<String>> audioFilesIn(String dir) async {
+    final out = <String>[];
+    await for (final e in Directory(dir).list(recursive: true, followLinks: false)) {
+      if (e is File && _isAudio(e.path)) out.add(e.path);
+    }
+    return out..sort();
+  }
+
+  /// Copies the song files in [sources] into [folder] (the library's top
+  /// level). A song that's already there is left alone. Each copy goes to
+  /// "<name>.part" first so a half-copied song never shows up.
+  static Future<({int added, int existing, int unsupported, int failed})> importFiles(
+      String folder, List<String> sources) async {
+    final dir = Directory(folder.replaceAll(RegExp(r'[\\/]+$'), ''));
+    await dir.create(recursive: true);
+    var added = 0, existing = 0, unsupported = 0, failed = 0;
+    for (final src in sources) {
+      final name = src.split(RegExp(r'[\\/]')).last;
+      if (!_isAudio(name) || !isSafeRelPath(name)) {
+        unsupported++;
+        continue;
+      }
+      final dest = File('${dir.path}\\$name');
+      if (await dest.exists()) {
+        existing++;
+        continue;
+      }
+      final part = File('${dest.path}.part');
+      try {
+        await File(src).copy(part.path);
+        await part.rename(dest.path);
+        added++;
+      } on FileSystemException {
+        failed++;
+        try {
+          if (await part.exists()) await part.delete();
+        } on FileSystemException {
+          // Nothing more to clean up.
+        }
+      }
+    }
+    return (added: added, existing: existing, unsupported: unsupported, failed: failed);
   }
 
   static Future<void> deleteFile(String folder, String path) async {

@@ -19,6 +19,7 @@ class Store extends ChangeNotifier {
   String folder = '';
   String server = defaultServer;
   bool syncing = false;
+  bool importing = false;
   Song? playing;
   bool paused = false;
   Timer? _t;
@@ -100,6 +101,32 @@ class Store extends ChangeNotifier {
     paused = !paused;
     _save();
     notifyListeners();
+  }
+
+  // ---- import
+  /// Copies the song files at [paths] into the music folder and refreshes the
+  /// library. Returns a one-line summary for the user.
+  Future<String> importSongs(List<String> paths) async {
+    if (importing) return 'Already importing';
+    importing = true;
+    status = 'Importing ${paths.length} file(s)...';
+    notifyListeners();
+    String msg;
+    try {
+      final r = await MusicSync.importFiles(folder, paths);
+      msg = [
+        r.added == 1 ? 'Imported 1 song' : 'Imported ${r.added} songs',
+        if (r.existing > 0) '${r.existing} already in your library',
+        if (r.unsupported > 0) '${r.unsupported} not a supported audio file',
+        if (r.failed > 0) '${r.failed} could not be copied',
+      ].join(' - ');
+    } catch (e) {
+      msg = 'Could not import: $e';
+    }
+    importing = false;
+    status = msg;
+    await rescan();
+    return msg;
   }
 
   // ---- delete
