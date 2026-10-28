@@ -40,7 +40,7 @@ fn parse(alloc: std.mem.Allocator, buf: []const u8, list: *std.ArrayList([:0]con
             has_token = true;
         } else if (c == ' ' and !in_quotes) {
             if (has_token) {
-                try list.append(alloc, try alloc.dupeZ(u8, cur.items));
+                try list.append(alloc, try alloc.dupeSentinel(u8, cur.items, 0));
                 cur.clearRetainingCapacity();
                 has_token = false;
             }
@@ -51,7 +51,7 @@ fn parse(alloc: std.mem.Allocator, buf: []const u8, list: *std.ArrayList([:0]con
     }
 
     if (in_quotes) return error.UnterminatedQuote;
-    if (has_token) try list.append(alloc, try alloc.dupeZ(u8, cur.items));
+    if (has_token) try list.append(alloc, try alloc.dupeSentinel(u8, cur.items, 0));
 }
 test "parse" {
     var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
