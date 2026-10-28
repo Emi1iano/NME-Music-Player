@@ -395,7 +395,7 @@ const Networks = struct {
             }
             fn getLocalIpWindows(io: std.Io) ![4]u8 {
                 var result: [4]u8 = undefined;
-                var child = try std.process.spawn(io, .{ .argv = &.{"ipconfig"}, .stdout = .pipe });
+                var child = try std.process.spawn(io, .{ .argv = &.{"ipconfig"}, .stdout = .pipe, .create_no_window = true });
 
                 var buffer: [1024]u8 = undefined;
                 var wbuffer: [1024 * 2]u8 = undefined;
