@@ -8,6 +8,7 @@ const Songs = std.ArrayList(Song);
 const Songs_R = std.ArrayList(*const Song);
 const Hashes = std.ArrayList([32]u8);
 
+pub const Local_Testing: bool = false;
 const app_path = "testing2/app";
 const song_extensions = [_][]const u8{ ".mp3", ".opus", ".flac", ".m4a" };
 
@@ -18,7 +19,7 @@ pub fn main(init: std.process.Init) !void {
     const alloc = init.arena.allocator();
     const args = try init.minimal.args.toSlice(alloc);
     defer alloc.free(args[0..]);
-    
+
     try start(init.io, args[1..]);
 }
 pub fn start(io: std.Io, args: []const []const u8) !void {
@@ -50,7 +51,7 @@ pub fn start(io: std.Io, args: []const []const u8) !void {
     // try sendSongs(&d_songs);
     // // Recieve differing songs
     // try recieveSongs();
-    
+
 }
 
 const Client = struct {
@@ -59,19 +60,23 @@ const Client = struct {
         defer socket.close(io);
 
         try sendInitialMessage(io, socket);
+        var buf: MTU_BUF = undefined;
+        const message = try socket.receive(io, &buf);
+        const d = message.data[1..];
+        std.debug.print("Other client public ip: {d}.{d}.{d}.{d}:{d}", .{d[0], d[1], d[2], d[3], std.mem.readInt(u16, d[4..6], .little)});
     }
     // TEST ------------------------------
     // TEST Use proper send like mysend.send
     /// 1 byte code, 6 byte local ip, 8 byte key
     fn sendInitialMessage(io: Io, socket: net.Socket) !void {
         var buf: MTU_BUF = undefined;
-        const message = try std.fmt.bufPrint(buf[0..], "{s}{s}{s}", .{Code.getByte(.INITIAL), try getLocalIpAndPort(io), getKey()});
+        const message = try std.fmt.bufPrint(buf[0..], "{s}{s}{s}", .{ Code.getByte(.INITIAL), try getLocalIpAndPort(io), getKey() });
         const ip = try getServerIp();
         try socket.send(io, &ip, message);
     }
     //FIXME
     fn getKey() [8]u8 {
-        return @splat(1);
+        return @splat('a');
     }
     //FIXME
     fn getLocalIpAndPort(io: Io) ![6]u8 {
@@ -98,6 +103,7 @@ const Client = struct {
         return client_socket;
     }
     fn getServerIp() !net.IpAddress {
+        if (Local_Testing) return try std.Io.net.IpAddress.parse("172.28.41.169", 5252);
         return try std.Io.net.IpAddress.parse("24.243.26.72", 5252);
     }
 };
@@ -124,7 +130,7 @@ const Add = struct {
                 if (!isSong(path)) return;
                 const file = try std.Io.Dir.openFileAbsolute(io, path, .{});
                 try addFile(io, file, table_f);
-            }
+            },
         }
         try group.await(io);
     }
@@ -149,7 +155,7 @@ const Add = struct {
         } else |_| {}
     }
     fn addFile(io: std.Io, file: std.Io.File, table_f: std.Io.File) !void {
-        try group.concurrent(io, addFileThreadWrapper, .{io, file, table_f});
+        try group.concurrent(io, addFileThreadWrapper, .{ io, file, table_f });
     }
     fn addFileThreadWrapper(io: std.Io, file: std.Io.File, table_f: std.Io.File) void {
         addFileThread(io, file, table_f) catch {
@@ -160,10 +166,10 @@ const Add = struct {
     fn addFileThread(io: std.Io, file: std.Io.File, table_f: std.Io.File) !void {
         var buf: [256]u8 = undefined;
         const len = try file.realPath(io, &buf);
-        
+
         const hash = try hashFile(io, file);
         file.close(io);
-        
+
         var wBuf: [1024]u8 = undefined;
         var writer = table_f.writer(io, &wBuf);
         var w = &writer.interface;
@@ -182,11 +188,11 @@ const Add = struct {
     fn hashFile(io: std.Io, file: std.Io.File) ![32]u8 {
         var result: [32]u8 = undefined;
         var b = std.crypto.hash.Blake3.init(.{});
-    
+
         var buf: [1024 * 256]u8 = undefined;
         var reader = file.reader(io, &buf);
         var r = &reader.interface;
-    
+
         //var data: [1024 * 64]u8 = undefined;
         while (true) {
             const chunk = r.peekGreedy(1) catch |err| switch (err) {
@@ -199,16 +205,16 @@ const Add = struct {
             // b.update(data[0..len]);
             // if (len != data.len) break;
         }
-    
+
         b.final(&result);
         return result;
     }
     fn getTableFile(io: std.Io) !std.Io.File {
         const cwd = std.Io.Dir.cwd();
-        
+
         const dir = cwd.openDir(io, app_path, .{}) catch try cwd.createDirPathOpen(io, app_path, .{});
         defer dir.close(io);
-        return dir.openFile(io, "music_table.txt", .{.mode = .read_write}) catch try dir.createFile(io, "music_table.txt", .{ .read = true });
+        return dir.openFile(io, "music_table.txt", .{ .mode = .read_write }) catch try dir.createFile(io, "music_table.txt", .{ .read = true });
     }
     fn isSong(path: []const u8) bool {
         const extension = std.Io.Dir.path.extension(path);
@@ -234,7 +240,7 @@ fn loadSongs(io: std.Io, songs: *Songs, alloc: std.mem.Allocator) !void {
         const play_count = try r.takeInt(u32, .native);
         const play_time = try r.takeInt(u32, .native);
         const pre = try r.takeDelimiter('\n');
-        const path = try alloc.dupe(u8, pre.?); 
+        const path = try alloc.dupe(u8, pre.?);
         try songs.append(alloc, .{ .hash = hash[0..32].*, .path = path, .play_count = play_count, .play_time = play_time });
     }
 }
@@ -293,7 +299,7 @@ const MySend = struct {
         const n = @min(space, bytes.len);
         @memcpy(self.buffer[self.end..][0..n], bytes[0..n]);
         self.end += n;
-    
+
         std.debug.print("{s}\n", .{self.buffer[0..self.end]});
         self.end = 0;
         return n;
@@ -309,7 +315,7 @@ const MySend = struct {
 
 test "idk" {
     const io = std.testing.io;
-    var thread = try std.process.spawn(io, .{ .argv = &.{"chcp", "65001"} });
+    var thread = try std.process.spawn(io, .{ .argv = &.{ "chcp", "65001" } });
     _ = try thread.wait(io);
     // TEST ---------------------------------------
     {
@@ -318,12 +324,12 @@ test "idk" {
         try w.end();
         table_f.close(io);
     }
-    
+
     const timestamp = std.Io.Timestamp.now(io, .awake);
-    try start(io, &.{"add", "C:/Users/Emi1iano/Music/Test/idk/"});
+    try start(io, &.{ "add", "C:/Users/Emi1iano/Music/Test/idk/" });
     // try main(io, &.{"add", "C:/Users/Emi1iano/Music/Music/"});
     try start(io, &.{});
     const d = timestamp.durationTo(std.Io.Timestamp.now(io, .awake)).toMilliseconds();
-    
+
     std.debug.print("Seconds {d}\n", .{d});
 }
