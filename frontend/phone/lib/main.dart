@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
 import 'screens/home_shell.dart';
+import 'services/appearance.dart';
 import 'services/app_log.dart';
 import 'services/backend.dart';
 import 'services/library.dart';
@@ -40,6 +41,7 @@ Future<void> main() async {
 
   // Load everything saved on the phone before showing the first screen.
   // Stats first, because the player writes into it as soon as music plays.
+  await Appearance.instance.init();
   await Stats.instance.init();
   await Player.instance.init();
   await Playlists.instance.init();

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/track.dart';
+import '../services/appearance.dart';
 import '../services/backend.dart';
 import '../services/library.dart';
 import '../services/player.dart';
@@ -63,7 +64,8 @@ class _SongsScreenState extends State<SongsScreen> {
       // Rebuilds this whole screen whenever the Library changes
       // (scan finished, sort changed, ...).
       child: ListenableBuilder(
-        listenable: library,
+        // Also rebuild when an Appearance switch changes.
+        listenable: Listenable.merge([library, Appearance.instance]),
         builder: (context, _) {
           final tracks = _filtered(library);
           return Column(
@@ -123,7 +125,9 @@ class _SongsScreenState extends State<SongsScreen> {
     // The A–Z scroller only makes sense for alphabetical lists of some size.
     final alphabetical =
         library.sortMode == SortMode.title || library.sortMode == SortMode.artist;
-    final showScroller = alphabetical && !searching && tracks.length >= 12;
+    final appearance = Appearance.instance;
+    final showScroller =
+        appearance.letterScroller && alphabetical && !searching && tracks.length >= 12;
 
     // RefreshIndicator = pull down to rescan the Music folder.
     final list = RefreshIndicator(
@@ -136,7 +140,7 @@ class _SongsScreenState extends State<SongsScreen> {
         builder: (context, snapshot) => CustomScrollView(
           controller: _scroll,
           slivers: [
-            if (!searching)
+            if (!searching && appearance.recentRows)
               SliverToBoxAdapter(child: _RecentRows(key: _headerKey, library: library)),
             // Fixed-height rows: only the ones on screen are built, so it
             // stays fast even with thousands of songs.

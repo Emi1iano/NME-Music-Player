@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../models/track.dart';
+import '../services/appearance.dart';
 import '../services/library.dart';
 import '../services/player.dart';
 import '../services/stats.dart';
@@ -65,8 +66,7 @@ class NowPlayingScreen extends StatelessWidget {
                   const Spacer(),
                   // Same Hero tag as the mini player's cover, so the small
                   // cover grows into this one when Now Playing opens.
-                  Hero(
-                    tag: nowPlayingArtTag,
+                  CoverHero(
                     child: Artwork(
                         imagePath: track?.artworkPath, size: artSize, radius: 12, name: track?.title),
                   ),
@@ -100,6 +100,21 @@ class NowPlayingScreen extends StatelessWidget {
 /// Hero tag shared by the mini player's cover and Now Playing's big cover.
 const nowPlayingArtTag = 'now-playing-art';
 
+/// Wraps a cover in the shared Hero (so it animates between the mini player
+/// and Now Playing), unless "Cover animation" is off in Settings.
+class CoverHero extends StatelessWidget {
+  final Widget child;
+  const CoverHero({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: Appearance.instance,
+        builder: (context, _) => Appearance.instance.coverAnimation
+            ? Hero(tag: nowPlayingArtTag, child: child)
+            : child,
+      );
+}
+
 /// Now Playing's background: the main color of the song's cover (or of its
 /// placeholder tile), fading into the app's background. Changes smoothly
 /// when the song changes.
@@ -110,6 +125,15 @@ class _Backdrop extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final player = Player.instance;
+    return ListenableBuilder(
+      listenable: Appearance.instance,
+      builder: (context, _) => Appearance.instance.coverColors
+          ? _tinted(player)
+          : ColoredBox(color: AppColors.background, child: child), // "Cover colors" off
+    );
+  }
+
+  Widget _tinted(Player player) {
     return StreamBuilder<Track?>(
       stream: player.currentTrackStream,
       initialData: player.currentTrack,

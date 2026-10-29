@@ -47,8 +47,8 @@ class MiniPlayer extends StatelessWidget {
               Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
               child: Row(children: [
-                Hero(
-                  tag: nowPlayingArtTag, // grows into Now Playing's cover
+                CoverHero(
+                  // grows into Now Playing's cover (if Cover animation is on)
                   child: Artwork(imagePath: track.artworkPath, size: 40, radius: 4, name: track.title),
                 ),
                 const SizedBox(width: 12),

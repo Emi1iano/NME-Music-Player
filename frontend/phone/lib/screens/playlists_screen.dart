@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/playlist.dart';
 import '../models/track.dart';
+import '../services/appearance.dart';
 import '../services/library.dart';
 import '../services/player.dart';
 import '../services/playlists.dart';
@@ -25,7 +26,7 @@ class PlaylistsScreen extends StatelessWidget {
     return SafeArea(
       bottom: false,
       child: ListenableBuilder(
-        listenable: Listenable.merge([playlists, Library.instance]),
+        listenable: Listenable.merge([playlists, Library.instance, Appearance.instance]),
         builder: (context, _) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

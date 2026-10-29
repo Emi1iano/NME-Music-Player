@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../services/app_log.dart';
+import '../services/appearance.dart';
 import '../services/backend.dart';
 import '../services/library.dart';
 import '../theme.dart';
@@ -76,6 +77,8 @@ class SettingsScreen extends StatelessWidget {
               ),
               onTap: library.scanning ? null : library.scan,
             ),
+            const _Header('Appearance'),
+            const _AppearanceSection(),
             const _Header('Sync'),
             const _SyncSection(),
             const _Header('Listening'),
@@ -255,6 +258,44 @@ class _SyncSection extends StatelessWidget {
           ),
         ]);
       },
+    );
+  }
+}
+
+/// Settings → Appearance: turn individual visual extras on or off.
+class _AppearanceSection extends StatelessWidget {
+  const _AppearanceSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final a = Appearance.instance;
+    Widget toggle(IconData icon, String title, String subtitle, bool value,
+            ValueChanged<bool> onChanged) =>
+        SwitchListTile(
+          secondary: Icon(icon),
+          title: Text(title),
+          subtitle: Text(subtitle, style: const TextStyle(color: AppColors.textSecondary)),
+          value: value,
+          onChanged: onChanged,
+        );
+    return ListenableBuilder(
+      listenable: a,
+      builder: (context, _) => Column(children: [
+        toggle(Icons.palette_outlined, 'Cover colors in Now Playing',
+            "Tint the background with the song's cover", a.coverColors,
+            (v) => a.coverColors = v),
+        toggle(Icons.open_in_full_rounded, 'Cover animation',
+            'The mini player cover grows into Now Playing', a.coverAnimation,
+            (v) => a.coverAnimation = v),
+        toggle(Icons.grid_view_rounded, 'Playlist cover grid',
+            "Show four songs' covers on each playlist", a.playlistGrid,
+            (v) => a.playlistGrid = v),
+        toggle(Icons.view_carousel_outlined, 'Recently added & played',
+            'Rows of covers at the top of Songs', a.recentRows, (v) => a.recentRows = v),
+        toggle(Icons.sort_by_alpha_rounded, 'A–Z scroller',
+            'Jump to a letter in long song lists', a.letterScroller,
+            (v) => a.letterScroller = v),
+      ]),
     );
   }
 }

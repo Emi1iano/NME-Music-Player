@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import '../models/track.dart';
+import '../services/appearance.dart';
 import '../theme.dart';
 
 /// Cover art from an image file on disk (the picture embedded in the song,
@@ -71,7 +72,8 @@ class PlaylistCover extends StatelessWidget {
   Widget build(BuildContext context) {
     // Four different songs (a playlist can't hold one twice, but be safe).
     final four = {for (final t in tracks) t.id: t}.values.take(4).toList();
-    if (four.length < 4) {
+    // Fewer than four songs, or "Playlist cover grid" off: one cover.
+    if (four.length < 4 || !Appearance.instance.playlistGrid) {
       final cover = tracks.where((t) => t.artworkPath != null).firstOrNull;
       return Artwork(imagePath: cover?.artworkPath, size: size, radius: radius, name: name);
     }
