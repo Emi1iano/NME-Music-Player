@@ -393,5 +393,16 @@ String formatListenTime(int seconds) {
   return m == 0 ? '${minutes ~/ 60} hr' : '${minutes ~/ 60} hr $m min';
 }
 
+/// How long ago [time] was, in words: "just now", "5 min ago", "3 hr ago",
+/// "yesterday", "4 days ago". [now] is for tests.
+String formatAgo(DateTime time, {DateTime? now}) {
+  final d = (now ?? DateTime.now()).difference(time);
+  if (d.inMinutes < 1) return 'just now';
+  if (d.inHours < 1) return '${d.inMinutes} min ago';
+  if (d.inDays < 1) return '${d.inHours} hr ago';
+  if (d.inDays == 1) return 'yesterday';
+  return '${d.inDays} days ago';
+}
+
 /// "1 play" / "4 plays", "1 song" / "12 songs".
 String plural(int n, String word) => '$n ${n == 1 ? word : '${word}s'}';

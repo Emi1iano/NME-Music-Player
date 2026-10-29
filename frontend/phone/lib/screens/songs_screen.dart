@@ -161,13 +161,22 @@ class _TopBar extends StatelessWidget {
           ListenableBuilder(
             listenable: Backend.instance,
             builder: (context, _) {
-              final busy = Backend.instance.isSyncing;
+              final backend = Backend.instance;
+              final busy = backend.isSyncing;
+              // The badge counts changes the next sync will send.
+              final pending = backend.pendingChanges;
               return IconButton(
-                tooltip: 'Sync',
+                tooltip: pending > 0 ? 'Sync ($pending waiting)' : 'Sync',
                 icon: busy
                     ? const SizedBox(
                         width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.sync_rounded),
+                    : Badge(
+                        isLabelVisible: pending > 0,
+                        label: Text(pending > 99 ? '99+' : '$pending'),
+                        backgroundColor: AppColors.accent,
+                        textColor: Colors.white,
+                        child: const Icon(Icons.sync_rounded),
+                      ),
                 onPressed: () => showSyncSheet(context),
               );
             },

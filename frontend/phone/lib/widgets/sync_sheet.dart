@@ -2,8 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../screens/debug_log_screen.dart';
+import '../screens/now_playing_screen.dart';
 import '../services/backend.dart';
+import '../services/library.dart';
+import '../services/player.dart';
 import '../theme.dart';
+import 'common.dart';
 
 /// The Sync panel (top-right sync button, or Settings → Sync with another
 /// device). Shows this phone's key, starts the backend's `sync`, and shows
@@ -148,11 +152,22 @@ class _SyncSheetState extends State<_SyncSheet> {
                       onPressed: () => Clipboard.setData(ClipboardData(text: key)),
                     ),
                 ]),
+                const SizedBox(height: 4),
+                Text(syncSummary(backend),
+                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
                 const SizedBox(height: 16),
                 _StatusRow(backend: backend),
                 if (_progress(backend) case final progress?) ...[
                   const SizedBox(height: 8),
                   Text(progress, style: const TextStyle(color: AppColors.textSecondary)),
+                ],
+                if (backend.finishingIn case final seconds?) ...[
+                  const SizedBox(height: 12),
+                  _FinishingCard(backend: backend, seconds: seconds),
+                ],
+                if (backend.receivedSongs.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  _ReceivedSongs(names: backend.receivedSongs),
                 ],
                 if (backend.syncLines.isNotEmpty) ...[
                   const SizedBox(height: 12),
@@ -243,9 +258,9 @@ class _SyncSheetState extends State<_SyncSheet> {
                   label: const Text('Open Debug log'),
                 ),
                 const Text(
-                  'Experimental: both devices tap Sync now with the same key. Once '
-                  'connected, each side sends its new, renamed and deleted songs; '
-                  'the connection stays open until you tap Cancel sync.',
+                  'Both devices tap Sync now with the same key. Once connected, each '
+                  'side sends its new, renamed and deleted songs, and the connection '
+                  'closes by itself when both are done.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
                 ),
@@ -274,6 +289,110 @@ String? _progress(Backend b) {
   return parts.isEmpty ? null : parts.join('  •  ');
 }
 
+/// Under the key: "3 changes waiting to sync  •  Last synced 5 min ago".
+/// Also used in Settings.
+String syncSummary(Backend b) {
+  final pending = b.pendingChanges == 0
+      ? 'Everything synced'
+      : '${b.pendingChanges} ${b.pendingChanges == 1 ? 'change' : 'changes'} waiting to sync';
+  final last = b.lastSyncedAt == null ? 'Never synced' : 'Last synced ${formatAgo(b.lastSyncedAt!)}';
+  return '$pending  •  $last';
+}
+
+/// "Sync complete: received 3 songs, sent 2." (+ a warning about songs that
+/// arrived incomplete).
+String _completeText(Backend b) {
+  String songs(int n) => n == 1 ? '1 song' : '$n songs';
+  final parts = [
+    if (b.songsReceived > 0) 'received ${songs(b.songsReceived)}',
+    if (b.songsSent > 0) 'sent ${songs(b.songsSent)}',
+    if (b.songsRenamed > 0) '${songs(b.songsRenamed)} renamed',
+    if (b.songsDeleted > 0) '${songs(b.songsDeleted)} deleted',
+  ];
+  final summary = parts.isEmpty ? 'Sync complete: everything was already up to date.'
+      : 'Sync complete: ${parts.join(', ')}.';
+  if (b.songsIncomplete == 0) return summary;
+  return '$summary ${songs(b.songsIncomplete)} arrived incomplete; sync again to fix.';
+}
+
+/// "Everything is synced. Closing the connection in 7 s" with Stay connected /
+/// Finish now. Shown once all our songs are confirmed and the other device
+/// has gone quiet.
+class _FinishingCard extends StatelessWidget {
+  final Backend backend;
+  final int seconds;
+  const _FinishingCard({required this.backend, required this.seconds});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 4, 4),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceHigh,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.done_all_rounded, color: Colors.greenAccent),
+          const SizedBox(width: 12),
+          Expanded(child: Text('All done. Closing the connection in $seconds s')),
+        ]),
+        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          TextButton(onPressed: backend.keepConnected, child: const Text('Stay connected')),
+          TextButton(onPressed: backend.finishSync, child: const Text('Finish now')),
+        ]),
+      ]),
+    );
+  }
+}
+
+/// The songs that arrived from the other device; tap one to play it.
+class _ReceivedSongs extends StatelessWidget {
+  final List<String> names;
+  const _ReceivedSongs({required this.names});
+
+  static const _shown = 5;
+
+  void _play(BuildContext context, String name) {
+    final library = Library.instance;
+    final track = library.trackById(name);
+    if (track == null) {
+      // The library rescans a couple of seconds after a song arrives.
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Still adding it to your library, try again in a moment')));
+      return;
+    }
+    // Grab the navigator first: this context goes away with the Sync panel.
+    final navigator = Navigator.of(context);
+    navigator.pop(); // close the Sync panel
+    Player.instance.playTracks(library.tracks, index: library.tracks.indexOf(track));
+    navigator.push(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => const NowPlayingScreen(),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Text('New from the other device',
+          style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+      for (final name in names.take(_shown))
+        ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.music_note_rounded),
+          title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+          trailing: const Icon(Icons.play_arrow_rounded),
+          onTap: () => _play(context, name),
+        ),
+      if (names.length > _shown)
+        Text('and ${names.length - _shown} more',
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+    ]);
+  }
+}
+
 /// One line saying where the sync is at, with an icon or spinner.
 class _StatusRow extends StatelessWidget {
   final Backend backend;
@@ -284,7 +403,7 @@ class _StatusRow extends StatelessWidget {
     final (Widget icon, String text) = switch (backend.syncState) {
       SyncState.idle => (
           const Icon(Icons.sync_rounded, color: AppColors.textSecondary),
-          'Not synced yet this session'
+          'Ready to sync'
         ),
       SyncState.connecting => (
           const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5)),
@@ -312,7 +431,7 @@ class _StatusRow extends StatelessWidget {
         ),
       SyncState.finished => (
           const Icon(Icons.check_circle_rounded, color: Colors.greenAccent),
-          'Sync finished'
+          _completeText(backend)
         ),
       SyncState.failed => (
           const Icon(Icons.error_outline_rounded, color: Colors.redAccent),

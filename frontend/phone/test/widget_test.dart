@@ -55,4 +55,13 @@ void main() {
     expect(plural(1, 'play'), '1 play');
     expect(plural(4, 'play'), '4 plays');
   });
+
+  test('"last synced" wording', () {
+    final now = DateTime(2026, 10, 28, 18, 0);
+    expect(formatAgo(now.subtract(const Duration(seconds: 20)), now: now), 'just now');
+    expect(formatAgo(now.subtract(const Duration(minutes: 5)), now: now), '5 min ago');
+    expect(formatAgo(now.subtract(const Duration(hours: 3)), now: now), '3 hr ago');
+    expect(formatAgo(now.subtract(const Duration(hours: 30)), now: now), 'yesterday');
+    expect(formatAgo(now.subtract(const Duration(days: 4)), now: now), '4 days ago');
+  });
 }

@@ -49,12 +49,15 @@ class Backend extends ChangeNotifier {
   static const _libName = 'libbackend.so';
   // v2: the backend before 2026-10 didn't really record `add`, so start over.
   static const _addedPrefsKey = 'backend_added_paths_v2';
+  static const _lastSyncPrefsKey = 'backend_last_synced_at';
 
   bool available = false;   // true once libbackend.so loaded on this device
   String? unavailableReason;
   late String baseDir;      // the backend's working folder
   String? key;              // this device's sync key, once known
   Set<String> added = {};   // song paths already sent to the backend with `add`
+  int pendingChanges = 0;   // lines in the backend's changes.txt: what the next sync sends
+  DateTime? lastSyncedAt;   // when a sync with another device last completed
 
   // Calls go through this chain so only one runs at a time (the backend
   // shares files between commands, so two at once could corrupt them).
@@ -93,7 +96,10 @@ class Backend extends ChangeNotifier {
   Future<void> init(String baseDir) async {
     this.baseDir = baseDir;
     await Directory(musicPath).create(recursive: true);
-    added = (await SharedPreferences.getInstance()).getStringList(_addedPrefsKey)?.toSet() ?? {};
+    final prefs = await SharedPreferences.getInstance();
+    added = prefs.getStringList(_addedPrefsKey)?.toSet() ?? {};
+    final last = prefs.getInt(_lastSyncPrefsKey);
+    if (last != null) lastSyncedAt = DateTime.fromMillisecondsSinceEpoch(last);
 
     if (!Platform.isAndroid) {
       // Only Android libraries are built so far.
@@ -137,6 +143,7 @@ class Backend extends ChangeNotifier {
     } else {
       AppLog.instance.info('Backend: using saved sync key');
     }
+    _refreshPending();
     notifyListeners();
   }
 
@@ -150,6 +157,7 @@ class Backend extends ChangeNotifier {
     if (code != 0) return false;
     added.add(trackPath);
     await _saveAdded();
+    _refreshPending();
     notifyListeners();
     return true;
   }
@@ -178,6 +186,7 @@ class Backend extends ChangeNotifier {
       added.add(newPath);
       await _saveAdded();
     }
+    _refreshPending();
     notifyListeners();
     return true;
   }
@@ -201,6 +210,7 @@ class Backend extends ChangeNotifier {
       return false;
     }
     if (added.remove(trackPath)) await _saveAdded();
+    _refreshPending();
     notifyListeners();
     return true;
   }
@@ -218,6 +228,7 @@ class Backend extends ChangeNotifier {
     }
     added.clear();
     await _saveAdded();
+    _refreshPending();
     AppLog.instance.info('Backend: sync data reset (song table, changes, music folders)');
     notifyListeners();
     return true;
@@ -251,7 +262,21 @@ class Backend extends ChangeNotifier {
   final List<String> syncLines = []; // the backend's messages during this sync
   // What this sync has done so far (shown in the Sync panel).
   int songsSent = 0, songsReceived = 0, songsRenamed = 0, songsDeleted = 0;
+  int songsIncomplete = 0;           // received, but the backend's hash check failed
+  final List<String> receivedSongs = []; // file names, in the order they arrived
   bool doneSending = false;          // we've sent all our changes
+  int? finishingIn;                  // seconds until the sync closes by itself (null: not yet)
+  bool stayConnected = false;        // "Stay connected" pressed: don't close by itself
+
+  // Finishing a sync by itself: the backend never says "the other device is
+  // done", so the app closes the connection once everything WE had to send
+  // is confirmed received ("Done sending" per song) and nothing has arrived
+  // for [_quietBeforeFinish].
+  static const _quietBeforeFinish = Duration(seconds: 10);
+  int _songsToSend = 0;              // "add" lines in changes.txt when the sync started
+  int _songsConfirmed = 0;           // "Done sending" lines so far
+  DateTime _lastActivity = DateTime.now();
+  bool _finishing = false;           // the app is closing a completed sync
   Timer? _rescanSoon;                // rescans shortly after the other device changes files
   Timer? _syncPoll;
 
@@ -280,8 +305,14 @@ class Backend extends ChangeNotifier {
     syncMode = null;
     _punchingDone = false;
     syncLines.clear();
-    songsSent = songsReceived = songsRenamed = songsDeleted = 0;
+    songsSent = songsReceived = songsRenamed = songsDeleted = songsIncomplete = 0;
+    receivedSongs.clear();
     doneSending = false;
+    finishingIn = null;
+    stayConnected = false;
+    _finishing = false;
+    _songsToSend = _readChanges().where((l) => l.startsWith('add')).length;
+    _songsConfirmed = 0;
     syncStartedAt = DateTime.now();
     notifyListeners();
     _logBackendOutput(); // skip older output so the panel only shows this sync
@@ -298,15 +329,26 @@ class Backend extends ChangeNotifier {
       AppLog.instance.info('Backend < $command = $code');
       final wasCancelling = syncState == SyncState.cancelling;
       _stopCancelling();
+      finishingIn = null;
       // The server sends "Disconnected" (TERMINATE) to a device that waited
       // 20 s without another device using the same key.
       final nobodyCame = syncPeer == null && !_punchingDone && syncMode == 'disconnected';
-      syncState = wasCancelling
-          ? SyncState.cancelled
-          : nobodyCame
-              ? SyncState.noPartner
-              : (code == 0 ? SyncState.finished : SyncState.failed);
-      if (wasCancelling) AppLog.instance.info('Backend: sync cancelled');
+      syncState = _finishing
+          ? SyncState.finished
+          : wasCancelling
+              ? SyncState.cancelled
+              : nobodyCame
+                  ? SyncState.noPartner
+                  : (code == 0 ? SyncState.finished : SyncState.failed);
+      if (wasCancelling && !_finishing) AppLog.instance.info('Backend: sync cancelled');
+      // Connected to another device and ended normally: remember when.
+      if (syncState == SyncState.finished && _punchingDone) {
+        lastSyncedAt = DateTime.now();
+        SharedPreferences.getInstance().then(
+            (prefs) => prefs.setInt(_lastSyncPrefsKey, lastSyncedAt!.millisecondsSinceEpoch));
+        AppLog.instance.info('Backend: sync complete (sent $songsSent, received $songsReceived)');
+      }
+      _refreshPending();
       if (songsReceived + songsRenamed + songsDeleted > 0) {
         _rescanSoon?.cancel();
         onFilesChanged?.call();
@@ -323,7 +365,10 @@ class Backend extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    _syncPoll = Timer.periodic(const Duration(seconds: 1), (_) => _readSyncOutput());
+    _syncPoll = Timer.periodic(const Duration(seconds: 1), (_) {
+      _readSyncOutput();
+      _checkFinished();
+    });
   }
 
   /// Background isolate entry point: runs the (long) sync command, then
@@ -348,12 +393,14 @@ class Backend extends ChangeNotifier {
       // direct connection fails, relayed through the server.
       final cancelling = syncState == SyncState.cancelling;
       if (line.contains('Done Punching') || line.startsWith('USE ')) {
+        if (!_punchingDone) _lastActivity = DateTime.now();
         _punchingDone = true;
         if (!cancelling) {
           syncState = SyncState.paired;
           syncMode = 'direct';
         }
       } else if (line.contains('Switching to relay')) {
+        if (!_punchingDone) _lastActivity = DateTime.now();
         _punchingDone = true;
         if (!cancelling) {
           syncState = SyncState.paired;
@@ -363,18 +410,32 @@ class Backend extends ChangeNotifier {
         // The other device or the server (after 60 s of relaying) hung up.
         syncMode = 'disconnected';
       }
+      // Anything the backend says once connected counts as activity, so a
+      // sync that is still moving songs doesn't close by itself.
+      if (_punchingDone) _lastActivity = DateTime.now();
       // Songs going each way. (Older backend messages first, then the
-      // reworked backend's: "Sending file x" / "Successfully recieved song x".)
+      // reworked backend's: "Sending file x" / "Done sending" /
+      // "Successfully recieved song x".)
       if (line.startsWith('file header:') || line.startsWith('Sending file ')) {
         songsSent++;
+      } else if (line.startsWith('Done sending')) {
+        // The other device confirmed every piece of the song we sent.
+        _songsConfirmed++;
+        if (_songsConfirmed >= _songsToSend) doneSending = true;
       } else if (line.startsWith('DONE SENDING STUFF')) {
         doneSending = true;
       } else if (line.startsWith('adding file ') ||
           line.startsWith('Successfully recieved song ')) {
         songsReceived++;
+        const prefix = 'Successfully recieved song ';
+        if (line.startsWith(prefix)) {
+          final name = line.substring(prefix.length).trim();
+          if (name.isNotEmpty) receivedSongs.add(name);
+        }
         _filesChanged();
       } else if (line.startsWith('Hashes dont match')) {
         // A song arrived incomplete (the backend keeps the partial file).
+        songsIncomplete++;
         AppLog.instance.warning('Backend: a received song was incomplete');
         _filesChanged();
       } else if (line.startsWith('renaming: ')) {
@@ -394,6 +455,71 @@ class Backend extends ChangeNotifier {
   void _filesChanged() {
     _rescanSoon?.cancel();
     _rescanSoon = Timer(const Duration(seconds: 2), () => onFilesChanged?.call());
+  }
+
+  /// Called every second while syncing: once connected, everything we had
+  /// to send is confirmed and the other device has been quiet for a while,
+  /// count down and then close the connection ([finishingIn] drives the
+  /// "Closing in 7 s" line in the Sync panel).
+  void _checkFinished() {
+    if (syncState != SyncState.paired || stayConnected || _finishing) {
+      if (finishingIn != null) {
+        finishingIn = null;
+        notifyListeners();
+      }
+      return;
+    }
+    if (_songsConfirmed >= _songsToSend) doneSending = true;
+    if (!doneSending) return;
+    final left = _quietBeforeFinish - DateTime.now().difference(_lastActivity);
+    if (left <= Duration.zero) {
+      finishSync();
+    } else {
+      finishingIn = (left.inMilliseconds / 1000).ceil();
+      notifyListeners();
+    }
+  }
+
+  /// Closes a sync that has done its work. Ends as "Sync complete" (not
+  /// "cancelled") and records the time.
+  Future<void> finishSync() async {
+    if (syncState != SyncState.paired || _finishing) return;
+    _finishing = true;
+    finishingIn = null;
+    AppLog.instance.info('Backend: everything sent and received, closing the connection');
+    await cancelSync();
+    // Couldn't stop it (cancelSync put the state back): let the user try again.
+    if (syncState == SyncState.paired) _finishing = false;
+  }
+
+  /// "Stay connected": keep the connection open instead of closing it by
+  /// itself (e.g. the other device is still sending a big song).
+  void keepConnected() {
+    stayConnected = true;
+    finishingIn = null;
+    notifyListeners();
+  }
+
+  /// The backend's list of changes the next sync will send (one per line,
+  /// e.g. "add id:3", "delete id:1").
+  List<String> _readChanges() {
+    try {
+      final file = File(p.join(baseDir, appFolder, 'changes.txt'));
+      if (!file.existsSync()) return const [];
+      return file.readAsLinesSync().map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+    } catch (e) {
+      AppLog.instance.warning('Backend: could not read changes.txt', e);
+      return const [];
+    }
+  }
+
+  /// Updates [pendingChanges] (the badge on the Sync button).
+  void _refreshPending() {
+    final count = _readChanges().length;
+    if (count != pendingChanges) {
+      pendingChanges = count;
+      notifyListeners();
+    }
   }
 
   // --------------------------------------------------------- cancelling sync
@@ -435,10 +561,10 @@ class Backend extends ChangeNotifier {
     _cancelSocket = socket;
     final backend = InternetAddress.loopbackIPv4;
 
-    // Connected: EXIT makes the backend send TERMINATE to the other device.
-    // (Only when connected; otherwise the EXIT would sit in its input and end
-    // the NEXT sync immediately.)
-    if (before == SyncState.paired) _typeToBackend('EXIT\n');
+    // Connected in chat mode: EXIT makes the backend send TERMINATE to the
+    // other device. (Only then: otherwise nothing reads its input, and the
+    // EXIT would sit there and end a later chat immediately.)
+    if (chatMode && before == SyncState.paired) _typeToBackend('EXIT\n');
 
     // Stop its listener; repeat every half second until sync returns (UDP
     // messages can get lost), for up to 15 seconds.

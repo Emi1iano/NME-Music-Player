@@ -248,8 +248,8 @@ class _SyncSection extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.devices_rounded),
             title: const Text('Sync with another device'),
-            subtitle: const Text('Experimental: pair two devices that use the same key',
-                style: TextStyle(color: AppColors.textSecondary)),
+            subtitle: Text(syncSummary(backend),
+                style: const TextStyle(color: AppColors.textSecondary)),
             trailing: const Icon(Icons.chevron_right_rounded),
             onTap: () => showSyncSheet(context),
           ),
