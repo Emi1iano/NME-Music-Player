@@ -89,10 +89,18 @@ ThemeData buildDarkTheme() {
     ),
     bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: AppColors.sheet,
+      shape: Appearance.instance.glass
+          ? const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(36)))
+          : null,
       surfaceTintColor: Colors.transparent,
       showDragHandle: true,
     ),
-    dialogTheme: DialogThemeData(backgroundColor: AppColors.sheet),
+    dialogTheme: DialogThemeData(
+      backgroundColor: AppColors.sheet,
+      shape: Appearance.instance.glass
+          ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(36))
+          : null,
+    ),
     snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
   );
 }

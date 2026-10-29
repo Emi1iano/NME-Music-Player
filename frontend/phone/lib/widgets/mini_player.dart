@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../models/track.dart';
 import '../screens/now_playing_screen.dart';
+import '../services/appearance.dart';
 import '../services/library.dart';
 import '../services/player.dart';
 import '../theme.dart';
 import 'artwork.dart';
+import 'glass.dart';
 
 /// Small bar above the tabs so you can get back to Now Playing.
 class MiniPlayer extends StatelessWidget {
@@ -22,8 +24,21 @@ class MiniPlayer extends StatelessWidget {
         final track = snapshot.data;
         // Nothing loaded yet -> take up no space at all.
         if (track == null) return const SizedBox.shrink();
+        // Glass style: a floating rounded frosted card above the tab bar.
+        if (Appearance.instance.glass) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: GlassPill(radius: 22, child: _bar(context, player, track, Colors.transparent)),
+          );
+        }
+        return _bar(context, player, track, AppColors.surfaceHigh);
+      },
+    );
+  }
+
+  Widget _bar(BuildContext context, Player player, Track track, Color color) {
         return Material(
-          color: AppColors.surfaceHigh,
+          color: color,
           child: InkWell(
             onTap: () => openNowPlaying(context),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -86,7 +101,5 @@ class MiniPlayer extends StatelessWidget {
             ]),
           ),
         );
-      },
-    );
   }
 }

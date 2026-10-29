@@ -118,3 +118,7 @@ class Appearance extends ChangeNotifier {
     notifyListeners();
   }
 }
+
+/// Corner radius for [base]: rounder in Glass style (Apple Music-like),
+/// unchanged otherwise.
+double rounded(double base) => Appearance.instance.glass ? base * 1.75 : base;

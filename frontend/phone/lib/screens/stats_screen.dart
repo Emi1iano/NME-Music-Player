@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/appearance.dart';
 import '../services/library.dart';
 import '../services/stats.dart';
 import '../theme.dart';
@@ -154,7 +155,7 @@ class _WeekChartState extends State<_WeekChart> {
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(rounded(16)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('This week', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
@@ -230,7 +231,7 @@ class _StatCard extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AppColors.surface,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(rounded(16)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),

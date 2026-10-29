@@ -33,9 +33,10 @@ class Artwork extends StatelessWidget {
     final path = imagePath;
     final placeholder = _Placeholder(name: name, size: size);
 
-    // ClipRRect rounds the corners of whatever is inside it.
+    // ClipRRect rounds the corners of whatever is inside it (rounder in
+    // Glass style; a circle stays a circle).
     return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
+      borderRadius: BorderRadius.circular(rounded(radius)),
       child: path == null
           ? placeholder
           : Image.file(
@@ -80,7 +81,7 @@ class PlaylistCover extends StatelessWidget {
     final half = size / 2;
     Widget cell(Track t) => Artwork(imagePath: t.artworkPath, size: half, radius: 0, name: t.title);
     return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
+      borderRadius: BorderRadius.circular(rounded(radius)),
       child: SizedBox(
         width: size,
         height: size,

@@ -69,3 +69,31 @@ class Frosted extends StatelessWidget {
     );
   }
 }
+
+/// A floating frosted shape (Glass style): blurs what's behind it, tints it
+/// with the see-through surface color, and adds a thin light edge, like
+/// Apple's glass. Used for the floating tab bar and mini player.
+class GlassPill extends StatelessWidget {
+  final Widget child;
+  final double radius;
+  const GlassPill({super.key, required this.child, this.radius = 28});
+
+  @override
+  Widget build(BuildContext context) {
+    final shape = BorderRadius.circular(radius);
+    return ClipRRect(
+      borderRadius: shape,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: shape,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}

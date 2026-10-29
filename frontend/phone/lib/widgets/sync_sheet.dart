@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../screens/debug_log_screen.dart';
 import '../screens/now_playing_screen.dart';
+import '../services/appearance.dart';
 import '../services/backend.dart';
 import '../services/library.dart';
 import '../services/player.dart';
@@ -234,7 +235,7 @@ class _SyncSheetState extends State<_SyncSheet> {
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
                       color: AppColors.background,
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(rounded(10)),
                     ),
                     child: SingleChildScrollView(
                       reverse: true,
@@ -370,7 +371,7 @@ class _FinishingCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 12, 4, 4),
       decoration: BoxDecoration(
         color: AppColors.surfaceHigh,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(rounded(12)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
@@ -483,7 +484,7 @@ class _StatusRow extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AppColors.surfaceHigh,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(rounded(12)),
       ),
       child: Row(children: [
         icon,

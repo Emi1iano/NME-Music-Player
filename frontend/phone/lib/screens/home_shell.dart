@@ -36,8 +36,9 @@ class _HomeShellState extends State<HomeShell> {
         ],
       )),
       // Bottom area = mini player (only visible while a song is loaded)
-      // stacked on top of the tab bar. Frosted glass in Glass style.
-      bottomNavigationBar: Frosted(child: Column(
+      // stacked on top of the tab bar. In Glass style both float as rounded
+      // frosted shapes, Apple Music style.
+      bottomNavigationBar: Appearance.instance.glass ? _floatingBars() : Frosted(child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           const MiniPlayer(),
@@ -54,6 +55,33 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       )),
+    );
+  }
+
+  /// Glass style: the mini player and a rounded tab bar floating above the
+  /// bottom edge, with the screen scrolling underneath.
+  Widget _floatingBars() {
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const MiniPlayer(),
+        GlassPill(
+          radius: 32,
+          child: NavigationBar(
+            height: 64,
+            backgroundColor: Colors.transparent, // the pill provides the glass
+            selectedIndex: _tab,
+            onDestinationSelected: (i) => setState(() => _tab = i),
+            destinations: const [
+              NavigationDestination(icon: Icon(Icons.music_note_rounded), label: 'Songs'),
+              NavigationDestination(icon: Icon(Icons.album_rounded), label: 'Albums'),
+              NavigationDestination(icon: Icon(Icons.mic_rounded), label: 'Artists'),
+              NavigationDestination(icon: Icon(Icons.queue_music_rounded), label: 'Playlists'),
+            ],
+          ),
+        ),
+      ]),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
@@ -163,7 +164,12 @@ class _Backdrop extends StatelessWidget {
                     stops: const [0.0, 0.85],
                   ),
                 ),
-                child: child,
+                child: Appearance.instance.glass && track?.artworkPath != null
+                    ? Stack(children: [
+                        Positioned.fill(child: _BlurredCover(path: track!.artworkPath!)),
+                        child,
+                      ])
+                    : child,
               ),
             );
           },
@@ -179,6 +185,52 @@ class _Backdrop extends StatelessWidget {
         .withLightness(hsl.lightness.clamp(0.18, 0.30))
         .withSaturation(hsl.saturation.clamp(0.0, 0.55))
         .toColor();
+  }
+}
+
+/// Glass style: the song's cover, heavily blurred, glowing behind the top of
+/// Now Playing (like Apple Music). It's darkened (60% brightness, 45%
+/// opacity) so the close button stays readable on it, and it fades out
+/// before the title and controls, which sit on the solid cover color.
+class _BlurredCover extends StatelessWidget {
+  final String path;
+  const _BlurredCover({required this.path});
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: ShaderMask(
+        // Fully visible at the top, gone by 60% of the way down.
+        shaderCallback: (rect) => const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.white, Colors.transparent],
+          stops: [0.0, 0.6],
+        ).createShader(rect),
+        blendMode: BlendMode.dstIn,
+        child: Opacity(
+          opacity: 0.45,
+          child: ColorFiltered(
+            colorFilter: const ColorFilter.matrix([
+              0.6, 0, 0, 0, 0, //
+              0, 0.6, 0, 0, 0, //
+              0, 0, 0.6, 0, 0, //
+              0, 0, 0, 1, 0,
+            ]),
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 60, sigmaY: 60, tileMode: TileMode.decal),
+              child: Image.file(
+                File(path),
+                fit: BoxFit.cover,
+                cacheWidth: 200, // tiny is plenty under this much blur
+                gaplessPlayback: true,
+                errorBuilder: (_, _, _) => const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
