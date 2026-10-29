@@ -102,7 +102,8 @@ class _Placeholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final letter = placeholderLetter(name);
-    if (letter == null) {
+    // No name, or "Colored letter tiles" off in Settings: the plain music note.
+    if (letter == null || !Appearance.instance.letterTiles) {
       return Container(
         width: size,
         height: size,
@@ -164,7 +165,9 @@ String? placeholderLetter(String? name) {
 /// colorful part of its cover art, or (no art) its placeholder color.
 /// Results are kept in memory, so each cover is only read once.
 Future<Color> coverColor({required String? imagePath, required String name}) async {
-  if (imagePath == null) return placeholderColors(name).$1;
+  if (imagePath == null) {
+    return Appearance.instance.letterTiles ? placeholderColors(name).$1 : AppColors.surfaceHigh;
+  }
   final cached = _coverColors[imagePath];
   if (cached != null) return cached;
   Color result;

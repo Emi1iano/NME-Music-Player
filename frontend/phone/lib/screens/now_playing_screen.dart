@@ -606,7 +606,7 @@ class _BottomRow extends StatelessWidget {
                   color: on ? AppColors.accent : AppColors.textPrimary),
               label: on
                   ? Text(_sleepTimerText(short: true),
-                      style: const TextStyle(color: AppColors.accent))
+                      style: TextStyle(color: AppColors.accent))
                   : const SizedBox.shrink(),
             );
           },
@@ -708,7 +708,7 @@ class _BottomRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: AppColors.textSecondary)),
                   trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                    if (isCurrent) const Icon(Icons.graphic_eq_rounded, color: AppColors.accent),
+                    if (isCurrent) Icon(Icons.graphic_eq_rounded, color: AppColors.accent),
                     if (!shuffled)
                       ReorderableDragStartListener(
                         index: position,

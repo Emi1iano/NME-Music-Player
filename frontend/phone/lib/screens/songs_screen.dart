@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../models/track.dart';
 import '../services/appearance.dart';
@@ -29,9 +28,9 @@ class _SongsScreenState extends State<SongsScreen> {
   final _scroll = ScrollController();      // the song list (for the A–Z scroller)
   final _headerKey = GlobalKey();          // the "Recently added/played" rows above the songs
 
-  // Every song row is exactly this tall (72 + 1 divider), so the A–Z scroller
-  // can work out where a letter starts without building every row.
-  static const _rowExtent = 73.0;
+  // Every song row is exactly this tall (row + 1 divider), so the A–Z
+  // scroller can work out where a letter starts without building every row.
+  double get _rowExtent => Appearance.instance.compactRows ? 61 : 73;
 
   /// Songs whose title, artist or album contains the search text.
   List<Track> _filtered(Library library) {
@@ -228,24 +227,27 @@ class _SwipeActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget background(Alignment align, Color color, IconData icon, String label) => Container(
+    if (!Appearance.instance.swipeActions) return child; // turned off in Settings
+    Widget background(
+            Alignment align, Color color, Color ink, IconData icon, String label) =>
+        Container(
           color: color,
           alignment: align,
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, color: Colors.white),
+            Icon(icon, color: ink),
             const SizedBox(width: 8),
-            Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+            Text(label, style: TextStyle(color: ink, fontWeight: FontWeight.w600)),
           ]),
         );
     return Dismissible(
       key: ValueKey('swipe:${track.id}'),
-      background: background(Alignment.centerLeft, AppColors.accent.withValues(alpha: 0.85),
+      background: background(Alignment.centerLeft, AppColors.accent, AppColors.onAccent,
           Icons.queue_play_next_rounded, 'Play next'),
-      secondaryBackground: background(Alignment.centerRight, Colors.redAccent.withValues(alpha: 0.85),
+      secondaryBackground: background(Alignment.centerRight, Colors.redAccent, Colors.white,
           Icons.delete_outline_rounded, 'Delete'),
       confirmDismiss: (direction) async {
-        HapticFeedback.mediumImpact();
+        Appearance.instance.vibrate();
         if (direction == DismissDirection.startToEnd) {
           Player.instance.playNext(track);
           ScaffoldMessenger.of(context)
@@ -278,7 +280,7 @@ class _LetterScrollerState extends State<_LetterScroller> {
     final letters = widget.letters;
     final i = (dy / height * letters.length).floor().clamp(0, letters.length - 1);
     if (letters[i] == _active) return;
-    HapticFeedback.selectionClick();
+    Appearance.instance.vibrate(tick: true);
     setState(() => _active = letters[i]);
     widget.onLetter(letters[i]);
   }
@@ -300,8 +302,8 @@ class _LetterScrollerState extends State<_LetterScroller> {
               borderRadius: BorderRadius.circular(28),
             ),
             child: Text(_active!,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
+                style: TextStyle(
+                    color: AppColors.onAccent, fontSize: 26, fontWeight: FontWeight.w800)),
           ),
         GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -392,7 +394,7 @@ class _CoverRow extends StatelessWidget {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Stack(children: [
                     Artwork(imagePath: track.artworkPath, size: _art, radius: 8, name: track.title),
-                    if (library.isNew(track.id))
+                    if (library.isNew(track.id) && Appearance.instance.newTags)
                       const Positioned(left: 6, top: 6, child: NewTag()),
                   ]),
                   const SizedBox(height: 6),
@@ -457,7 +459,7 @@ class _TopBar extends StatelessWidget {
                   isLabelVisible: pending > 0 && !busy,
                   label: Text(pending > 99 ? '99+' : '$pending'),
                   backgroundColor: AppColors.accent,
-                  textColor: Colors.white,
+                  textColor: AppColors.onAccent,
                   child: _SyncIcon(spinning: busy),
                 ),
                 onPressed: () => showSyncSheet(context),

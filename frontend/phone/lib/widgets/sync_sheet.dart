@@ -453,7 +453,7 @@ class _StatusRow extends StatelessWidget {
               : 'Found ${backend.syncPeer}, connecting…'
         ),
       SyncState.paired => (
-          const Icon(Icons.link_rounded, color: AppColors.accent),
+          Icon(Icons.link_rounded, color: AppColors.accent),
           'Connected to ${backend.syncPeer ?? "the other device"}'
               '${backend.syncMode == null ? '' : ' (${backend.syncMode})'}'
         ),

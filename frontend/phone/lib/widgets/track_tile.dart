@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/track.dart';
+import '../services/appearance.dart';
 import '../services/library.dart';
 import '../theme.dart';
 import 'artwork.dart';
@@ -27,12 +28,16 @@ class TrackTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isNew = Library.instance.isNew(track.id);
+    final appearance = Appearance.instance;
+    final isNew = appearance.newTags && Library.instance.isNew(track.id);
+    final compact = appearance.compactRows; // Settings → Appearance → Compact song rows
     return ListTile(
       onTap: onTap,
       onLongPress: onLongPress,
+      dense: compact,
+      visualDensity: compact ? VisualDensity.compact : null,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-      leading: Artwork(imagePath: track.artworkPath, size: 48, name: track.title),
+      leading: Artwork(imagePath: track.artworkPath, size: compact ? 40 : 48, name: track.title),
       title: Row(children: [
         Flexible(
           child: Text(
@@ -75,9 +80,12 @@ class NewTag extends StatelessWidget {
         color: AppColors.accent,
         borderRadius: BorderRadius.circular(4),
       ),
-      child: const Text('NEW',
+      child: Text('NEW',
           style: TextStyle(
-              color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+              color: AppColors.onAccent,
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5)),
     );
   }
 }

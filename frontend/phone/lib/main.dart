@@ -70,6 +70,7 @@ class _NmeMusicAppState extends State<NmeMusicApp> {
   @override
   void initState() {
     super.initState();
+    Appearance.instance.addListener(_appearanceChanged);
     // Save listening stats right away when the app goes to the background.
     _lifecycle = AppLifecycleListener(
       onPause: () {
@@ -87,8 +88,22 @@ class _NmeMusicAppState extends State<NmeMusicApp> {
 
   @override
   void dispose() {
+    Appearance.instance.removeListener(_appearanceChanged);
     _lifecycle.dispose();
     super.dispose();
+  }
+
+  /// A Settings → Appearance option changed (e.g. the accent color): rebuild
+  /// every screen, including pages open on top like Settings itself, so the
+  /// change shows everywhere at once without losing your place.
+  void _appearanceChanged() {
+    void rebuild(Element element) {
+      element.markNeedsBuild();
+      element.visitChildren(rebuild);
+    }
+
+    (context as Element).visitChildren(rebuild);
+    setState(() {}); // new theme colors
   }
 
   @override

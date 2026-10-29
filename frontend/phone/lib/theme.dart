@@ -1,15 +1,27 @@
 import 'package:flutter/material.dart';
 
+import 'services/appearance.dart';
+
 // All the app's colors in one place, so the look can be changed by editing
 // this file only. (0xFF = fully opaque, then the usual RRGGBB hex color.)
 class AppColors {
   static const background = Color(0xFF0E0E11);
   static const surface = Color(0xFF1A1A1F);
   static const surfaceHigh = Color(0xFF26262D);
-  static const accent = Color(0xFF8B7CFF);
+  // The accent is picked in Settings → Appearance, so it isn't a constant.
+  static Color get accent => Appearance.instance.accent;
+  // Text/icons drawn ON the accent: white or near-black, whichever reads better.
+  static Color get onAccent => _readableOn(accent);
   static const textPrimary = Color(0xFFF2F2F5);
   static const textSecondary = Color(0xFF9A9AA5);
   static const divider = Color(0xFF2A2A31);
+
+  static Color _readableOn(Color c) {
+    final l = c.computeLuminance();
+    final onWhite = 1.05 / (l + 0.05);
+    final onDark = (l + 0.05) / (background.computeLuminance() + 0.05);
+    return onWhite >= onDark ? Colors.white : background;
+  }
 }
 
 // Builds the dark Material 3 theme used by MaterialApp in main.dart.
@@ -21,6 +33,7 @@ ThemeData buildDarkTheme() {
     brightness: Brightness.dark,
   ).copyWith(
     primary: AppColors.accent,
+    onPrimary: AppColors.onAccent,
     surface: AppColors.background,
     surfaceContainer: AppColors.surface,
     surfaceContainerHigh: AppColors.surfaceHigh,

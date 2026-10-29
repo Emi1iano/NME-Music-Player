@@ -281,6 +281,53 @@ class _AppearanceSection extends StatelessWidget {
     return ListenableBuilder(
       listenable: a,
       builder: (context, _) => Column(children: [
+        // Accent color: a row of color dots; the chosen one has a check.
+        ListTile(
+          leading: const Icon(Icons.color_lens_outlined),
+          title: const Text('Accent color'),
+          subtitle: Text(
+            Appearance.accentChoices
+                    .where((c) => c.$2.toARGB32() == a.accent.toARGB32())
+                    .firstOrNull
+                    ?.$1 ??
+                'Custom',
+            style: const TextStyle(color: AppColors.textSecondary),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(72, 0, 16, 12),
+          child: Wrap(spacing: 12, runSpacing: 12, children: [
+            for (final (name, color) in Appearance.accentChoices)
+              Semantics(
+                button: true,
+                selected: color.toARGB32() == a.accent.toARGB32(),
+                label: '$name accent',
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => a.accent = color,
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                      border: color.toARGB32() == a.accent.toARGB32()
+                          ? Border.all(color: AppColors.textPrimary, width: 2)
+                          : null,
+                    ),
+                    child: color.toARGB32() == a.accent.toARGB32()
+                        ? Icon(Icons.check_rounded, size: 20, color: AppColors.onAccent)
+                        : null,
+                  ),
+                ),
+              ),
+          ]),
+        ),
+        toggle(Icons.density_small_rounded, 'Compact song rows',
+            'Smaller rows, more songs on screen', a.compactRows, (v) => a.compactRows = v),
+        toggle(Icons.abc_rounded, 'Colored letter tiles',
+            'Songs without cover art get a colored tile with their first letter',
+            a.letterTiles, (v) => a.letterTiles = v),
         toggle(Icons.palette_outlined, 'Cover colors in Now Playing',
             "Tint the background with the song's cover", a.coverColors,
             (v) => a.coverColors = v),
@@ -295,6 +342,14 @@ class _AppearanceSection extends StatelessWidget {
         toggle(Icons.sort_by_alpha_rounded, 'A–Z scroller',
             'Jump to a letter in long song lists', a.letterScroller,
             (v) => a.letterScroller = v),
+        toggle(Icons.swipe_rounded, 'Swipe actions',
+            'Swipe a song right for Play next, left for Delete', a.swipeActions,
+            (v) => a.swipeActions = v),
+        toggle(Icons.fiber_new_outlined, 'NEW tags',
+            'Mark songs from a sync until you play them', a.newTags, (v) => a.newTags = v),
+        toggle(Icons.vibration_rounded, 'Vibration',
+            'On long-press, swipes, delete and sync complete', a.vibration,
+            (v) => a.vibration = v),
       ]),
     );
   }
@@ -309,7 +364,7 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
         child: Text(text.toUpperCase(),
-            style: const TextStyle(
+            style: TextStyle(
                 color: AppColors.accent,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,

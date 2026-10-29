@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../models/playlist.dart';
 import '../models/track.dart';
 import 'package:path/path.dart' as p;
 
+import '../services/appearance.dart';
 import '../services/backend.dart';
 import '../services/importer.dart';
 import '../services/library.dart';
@@ -300,7 +300,7 @@ Future<void> deleteSong(BuildContext context, Track track) async {
 
   // Hide it now and offer Undo for a few seconds; only then delete the file.
   library.hideTrack(track.id);
-  HapticFeedback.mediumImpact();
+  Appearance.instance.vibrate();
   messenger.hideCurrentSnackBar(); // a previous "Deleted" message: that delete goes ahead
   final reason = await messenger
       .showSnackBar(SnackBar(
@@ -329,7 +329,7 @@ Future<void> deleteSong(BuildContext context, Track track) async {
 
 /// Long-press on a song: Add to playlist, Rename file, Delete song.
 void showSongActions(BuildContext context, Track track) {
-  HapticFeedback.mediumImpact();
+  Appearance.instance.vibrate();
   showModalBottomSheet<void>(
     context: context,
     builder: (sheetContext) => SafeArea(
