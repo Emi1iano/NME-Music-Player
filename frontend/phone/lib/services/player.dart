@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:audio_session/audio_session.dart';
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
@@ -30,6 +31,12 @@ class Player {
   int _listenedThisPlay = 0;      // seconds heard since this listen started
   bool _countedThisPlay = false;  // so one listen only adds ONE to playCount
 
+  // Sleep timer: pause at [sleepAt], or when the current song ends.
+  // ValueNotifiers so Now Playing can show the time left.
+  final sleepAt = ValueNotifier<DateTime?>(null);
+  final sleepAfterSong = ValueNotifier<bool>(false);
+  Timer? _sleepTimer;
+
   Future<void> init() async {
     // Tell the phone we're a music app (pauses for calls, ducks for
     // navigation voice, etc.).
@@ -38,6 +45,13 @@ class Player {
 
     // A new track (or the same one looping) starts a new listen.
     audio.currentIndexStream.listen((_) => _startNewListen());
+    // "End of song" sleep timer: pause when the next song starts.
+    audio.positionDiscontinuityStream.listen((d) {
+      if (sleepAfterSong.value && d.reason == PositionDiscontinuityReason.autoAdvance) {
+        audio.pause();
+        cancelSleepTimer();
+      }
+    });
     // "Discontinuity" = the position jumped: the song auto-advanced
     // (including repeat-one looping) or the user seeked back to the start.
     audio.positionDiscontinuityStream.listen((d) {
@@ -163,6 +177,44 @@ class Player {
       await audio.removeAudioSourceAt(i);
     }
     if (_queue.isEmpty) await audio.stop();
+  }
+
+  /// Drag-to-reorder in "Up next": moves the song at [from] to [to]
+  /// (positions in the unshuffled queue).
+  Future<void> moveInQueue(int from, int to) async {
+    if (from == to || from < 0 || from >= _queue.length) return;
+    _queue.insert(to, _queue.removeAt(from));
+    await audio.moveAudioSource(from, to);
+  }
+
+  /// Swipe away a song in "Up next" (skips ahead if it's the one playing).
+  Future<void> removeFromQueue(int index) async {
+    if (index < 0 || index >= _queue.length) return;
+    _queue.removeAt(index);
+    await audio.removeAudioSourceAt(index);
+    if (_queue.isEmpty) await audio.stop();
+  }
+
+  /// Sleep timer: pause after [duration], or (null) at the end of the
+  /// current song.
+  void setSleepTimer(Duration? duration) {
+    cancelSleepTimer();
+    if (duration == null) {
+      sleepAfterSong.value = true;
+      return;
+    }
+    sleepAt.value = DateTime.now().add(duration);
+    _sleepTimer = Timer(duration, () {
+      audio.pause();
+      cancelSleepTimer();
+    });
+  }
+
+  void cancelSleepTimer() {
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
+    sleepAt.value = null;
+    sleepAfterSong.value = false;
   }
 
   /// The big play/pause button.

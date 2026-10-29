@@ -4,6 +4,7 @@ import 'package:phone/models/playback_stats.dart';
 import 'package:phone/models/playlist.dart';
 import 'package:phone/models/track.dart';
 import 'package:phone/services/library.dart';
+import 'package:phone/services/stats.dart';
 import 'package:phone/widgets/artwork.dart';
 import 'package:phone/widgets/common.dart';
 
@@ -90,5 +91,13 @@ void main() {
     // Same name, same colors, every time.
     expect(placeholderColors('Burn'), placeholderColors('Burn'));
     expect(placeholderColors('Burn'), isNot(placeholderColors('Cry for you')));
+  });
+
+  test('weekly chart days', () {
+    expect(Stats.dayKey(DateTime(2026, 3, 7, 23, 59)), '2026-03-07');
+    final week = Stats.instance.lastDays(7, now: DateTime(2026, 10, 28, 18));
+    expect(week.length, 7);
+    expect(week.first.$1, DateTime(2026, 10, 22)); // oldest first
+    expect(week.last.$1, DateTime(2026, 10, 28)); // ends today
   });
 }

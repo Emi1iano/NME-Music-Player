@@ -73,7 +73,11 @@ class Library extends ChangeNotifier {
   bool _scanInProgress = false;   // stops two scans from running at the same time
 
   // Read-only access for the screens (they can look but not change the lists).
-  List<Track> get tracks => _tracks;
+  // Songs deleted a moment ago: hidden from the Songs list while the
+  // "Deleted • Undo" message is up; the file is only removed afterwards.
+  final _hidden = <String>{};
+  List<Track> get tracks =>
+      _hidden.isEmpty ? _tracks : _tracks.where((t) => !_hidden.contains(t.id)).toList();
   List<Album> get albums => _albums;
   List<Artist> get artists => _artists;
   SortMode get sortMode => _sortMode;
@@ -235,6 +239,16 @@ class Library extends ChangeNotifier {
     clearNew(track.id);
     await scan();
     return true;
+  }
+
+  /// Hides a song from the Songs list (it's about to be deleted).
+  void hideTrack(String trackId) {
+    if (_hidden.add(trackId)) notifyListeners();
+  }
+
+  /// Shows it again ("Undo", or the delete is done and it's gone anyway).
+  void unhideTrack(String trackId) {
+    if (_hidden.remove(trackId)) notifyListeners();
   }
 
   /// True for a song that arrived by sync and hasn't been played yet.

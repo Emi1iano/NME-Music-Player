@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/playlist.dart';
 import '../models/track.dart';
@@ -289,45 +290,46 @@ Future<void> renameSongFile(BuildContext context, Track track) async {
   messenger.showSnackBar(SnackBar(content: Text('Renamed to $finalName')));
 }
 
-/// "Delete song" (Now Playing ⋯ menu and long-press on a song): asks first,
-/// then removes it from the queue, deletes the file, and drops its stats and
-/// playlist entries.
+/// "Delete song" (long-press menu, swipe left, Now Playing ⋯): hides the song
+/// right away with a "Deleted • Undo" message; after 5 s without Undo it's
+/// taken out of the queue, its file is deleted, and its stats and playlist
+/// entries are dropped.
 Future<void> deleteSong(BuildContext context, Track track) async {
   final messenger = ScaffoldMessenger.of(context);
-  final ok = await showDialog<bool>(
-    context: context,
-    builder: (c) => AlertDialog(
-      title: Text('Delete "${track.title}"?'),
-      content: const Text(
-          "The file is removed from this phone, along with its play count and "
-          "playlist entries. This can't be undone."),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-        FilledButton(
-          style: FilledButton.styleFrom(
-              backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
-          onPressed: () => Navigator.pop(c, true),
-          child: const Text('Delete'),
-        ),
-      ],
-    ),
-  );
-  if (ok != true) return;
+  final library = Library.instance;
+
+  // Hide it now and offer Undo for a few seconds; only then delete the file.
+  library.hideTrack(track.id);
+  HapticFeedback.mediumImpact();
+  messenger.hideCurrentSnackBar(); // a previous "Deleted" message: that delete goes ahead
+  final reason = await messenger
+      .showSnackBar(SnackBar(
+        content: Text('Deleted ${track.title}'),
+        duration: const Duration(seconds: 5),
+        action: SnackBarAction(label: 'Undo', onPressed: () {}),
+      ))
+      .closed;
+  if (reason == SnackBarClosedReason.action) {
+    library.unhideTrack(track.id);
+    return;
+  }
 
   // Out of the queue first, so the player isn't holding the file.
   await Player.instance.removeTrack(track.id);
-  if (!await Library.instance.deleteTrack(track)) {
+  final deleted = await library.deleteTrack(track);
+  library.unhideTrack(track.id); // gone from the library now (or back, if it failed)
+  if (!deleted) {
     messenger.showSnackBar(
         const SnackBar(content: Text('Delete failed. See Settings → Debug log')));
     return;
   }
   Stats.instance.forgetTrack(track.id);
   await Playlists.instance.forgetTrack(track.id);
-  messenger.showSnackBar(SnackBar(content: Text('Deleted ${track.title}')));
 }
 
 /// Long-press on a song: Add to playlist, Rename file, Delete song.
 void showSongActions(BuildContext context, Track track) {
+  HapticFeedback.mediumImpact();
   showModalBottomSheet<void>(
     context: context,
     builder: (sheetContext) => SafeArea(

@@ -5,6 +5,7 @@ import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -351,6 +352,7 @@ class Backend extends ChangeNotifier {
         SharedPreferences.getInstance().then(
             (prefs) => prefs.setInt(_lastSyncPrefsKey, lastSyncedAt!.millisecondsSinceEpoch));
         AppLog.instance.info('Backend: sync complete (sent $songsSent, received $songsReceived)');
+        HapticFeedback.mediumImpact();
       }
       _refreshPending();
       if (songsReceived + songsRenamed + songsDeleted > 0) {

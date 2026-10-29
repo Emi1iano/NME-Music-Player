@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/track.dart';
 import '../services/backend.dart';
@@ -6,6 +7,7 @@ import '../services/library.dart';
 import '../services/player.dart';
 import '../services/stats.dart';
 import '../theme.dart';
+import '../widgets/artwork.dart';
 import '../widgets/common.dart';
 import '../widgets/sync_sheet.dart';
 import '../widgets/track_tile.dart';
@@ -23,6 +25,12 @@ class SongsScreen extends StatefulWidget {
 class _SongsScreenState extends State<SongsScreen> {
   final _search = TextEditingController(); // holds the search box text
   String _query = '';
+  final _scroll = ScrollController();      // the song list (for the A–Z scroller)
+  final _headerKey = GlobalKey();          // the "Recently added/played" rows above the songs
+
+  // Every song row is exactly this tall (72 + 1 divider), so the A–Z scroller
+  // can work out where a letter starts without building every row.
+  static const _rowExtent = 73.0;
 
   /// Songs whose title, artist or album contains the search text.
   List<Track> _filtered(Library library) {
@@ -40,6 +48,7 @@ class _SongsScreenState extends State<SongsScreen> {
   @override
   void dispose() {
     _search.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -110,41 +119,294 @@ class _SongsScreenState extends State<SongsScreen> {
 
     final player = Player.instance;
     final showPlays = library.sortMode == SortMode.mostPlayed;
+    final searching = _query.trim().isNotEmpty;
+    // The A–Z scroller only makes sense for alphabetical lists of some size.
+    final alphabetical =
+        library.sortMode == SortMode.title || library.sortMode == SortMode.artist;
+    final showScroller = alphabetical && !searching && tracks.length >= 12;
+
     // RefreshIndicator = pull down to rescan the Music folder.
-    return RefreshIndicator(
+    final list = RefreshIndicator(
       onRefresh: library.scan,
       // StreamBuilder rebuilds when the current song changes, so the playing
       // song is highlighted in the list.
       child: StreamBuilder<Track?>(
         stream: player.currentTrackStream,
         initialData: player.currentTrack,
-        // ListView.separated only builds the rows that are on screen, so it
-        // stays fast even with thousands of songs.
-        builder: (context, snapshot) => ListView.separated(
-          padding: const EdgeInsets.only(bottom: 8),
+        builder: (context, snapshot) => CustomScrollView(
+          controller: _scroll,
+          slivers: [
+            if (!searching)
+              SliverToBoxAdapter(child: _RecentRows(key: _headerKey, library: library)),
+            // Fixed-height rows: only the ones on screen are built, so it
+            // stays fast even with thousands of songs.
+            SliverFixedExtentList(
+              itemExtent: _rowExtent,
+              delegate: SliverChildBuilderDelegate(
+                childCount: tracks.length,
+                (context, i) {
+                  final track = tracks[i];
+                  return Column(children: [
+                    SizedBox(
+                      height: _rowExtent - 1,
+                      child: _SwipeActions(
+                        track: track,
+                        child: TrackTile(
+                          track: track,
+                          isCurrent: snapshot.data?.id == track.id,
+                          trailing: showPlays
+                              ? Text(plural(Stats.instance.of(track.id).playCount, 'play'),
+                                  style: const TextStyle(color: AppColors.textSecondary))
+                              : null,
+                          // Tap: play the list starting at this song and open Now Playing.
+                          onTap: () {
+                            player.playTracks(tracks, index: i);
+                            openNowPlaying(context);
+                          },
+                          // Long-press: Play next / Add to queue / ... / Delete.
+                          onLongPress: () => showSongActions(context, track),
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 1, indent: 80, endIndent: 16),
+                  ]);
+                },
+              ),
+            ),
+            const SliverToBoxAdapter(child: SizedBox(height: 8)),
+          ],
+        ),
+      ),
+    );
+    if (!showScroller) return list;
+
+    // First row of each letter (by title, or by artist when sorted by artist).
+    final starts = <String, int>{};
+    for (final (i, t) in tracks.indexed) {
+      final name = library.sortMode == SortMode.artist ? library.artistName(t.artistId) : t.title;
+      starts.putIfAbsent(_letterOf(name), () => i);
+    }
+    return Stack(children: [
+      list,
+      Positioned(
+        right: 0,
+        top: 0,
+        bottom: 0,
+        child: _LetterScroller(
+          letters: starts.keys.toList(),
+          onLetter: (letter) {
+            final header = (_headerKey.currentContext?.findRenderObject() as RenderBox?)?.size.height ?? 0;
+            final target = header + starts[letter]! * _rowExtent;
+            _scroll.jumpTo(target.clamp(0, _scroll.position.maxScrollExtent));
+          },
+        ),
+      ),
+    ]);
+  }
+
+  /// "A".."Z" for a name starting with a letter (accents dropped by
+  /// uppercasing only), "#" for anything else.
+  static String _letterOf(String name) {
+    final t = name.trim();
+    if (t.isEmpty) return '#';
+    final c = t[0].toUpperCase();
+    return RegExp(r'[A-Z]').hasMatch(c) ? c : '#';
+  }
+}
+
+/// Swipe a song row: right = Play next, left = Delete (with Undo).
+/// The row snaps back either way; a deleted song disappears from the list
+/// by itself.
+class _SwipeActions extends StatelessWidget {
+  final Track track;
+  final Widget child;
+  const _SwipeActions({required this.track, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget background(Alignment align, Color color, IconData icon, String label) => Container(
+          color: color,
+          alignment: align,
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, color: Colors.white),
+            const SizedBox(width: 8),
+            Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+          ]),
+        );
+    return Dismissible(
+      key: ValueKey('swipe:${track.id}'),
+      background: background(Alignment.centerLeft, AppColors.accent.withValues(alpha: 0.85),
+          Icons.queue_play_next_rounded, 'Play next'),
+      secondaryBackground: background(Alignment.centerRight, Colors.redAccent.withValues(alpha: 0.85),
+          Icons.delete_outline_rounded, 'Delete'),
+      confirmDismiss: (direction) async {
+        HapticFeedback.mediumImpact();
+        if (direction == DismissDirection.startToEnd) {
+          Player.instance.playNext(track);
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('${track.title} plays next')));
+        } else {
+          deleteSong(context, track); // hides it right away, Undo for 5 s
+        }
+        return false; // snap back; the library updates the list
+      },
+      child: child,
+    );
+  }
+}
+
+/// The A–Z strip on the right edge of the Songs list: tap or drag along it to
+/// jump to a letter. Shows a bubble with the letter while dragging.
+class _LetterScroller extends StatefulWidget {
+  final List<String> letters;
+  final ValueChanged<String> onLetter;
+  const _LetterScroller({required this.letters, required this.onLetter});
+
+  @override
+  State<_LetterScroller> createState() => _LetterScrollerState();
+}
+
+class _LetterScrollerState extends State<_LetterScroller> {
+  String? _active; // letter under the finger (null: not touching)
+
+  void _pick(double dy, double height) {
+    final letters = widget.letters;
+    final i = (dy / height * letters.length).floor().clamp(0, letters.length - 1);
+    if (letters[i] == _active) return;
+    HapticFeedback.selectionClick();
+    setState(() => _active = letters[i]);
+    widget.onLetter(letters[i]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final height = constraints.maxHeight;
+      return Row(mainAxisSize: MainAxisSize.min, children: [
+        // The bubble next to the strip while dragging.
+        if (_active != null)
+          Container(
+            width: 56,
+            height: 56,
+            margin: const EdgeInsets.only(right: 8),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: AppColors.accent,
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Text(_active!,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
+          ),
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onVerticalDragStart: (d) => _pick(d.localPosition.dy, height),
+          onVerticalDragUpdate: (d) => _pick(d.localPosition.dy, height),
+          onVerticalDragEnd: (_) => setState(() => _active = null),
+          onTapDown: (d) => _pick(d.localPosition.dy, height),
+          onTapUp: (_) => setState(() => _active = null),
+          child: SizedBox(
+            width: 24,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                for (final l in widget.letters)
+                  Text(l,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: l == _active ? AppColors.accent : AppColors.textSecondary,
+                      )),
+              ],
+            ),
+          ),
+        ),
+      ]);
+    });
+  }
+}
+
+/// "Recently added" and "Recently played": rows of covers you scroll
+/// sideways, above the song list. Tap to play, hold for the song menu.
+class _RecentRows extends StatelessWidget {
+  final Library library;
+  const _RecentRows({super.key, required this.library});
+
+  @override
+  Widget build(BuildContext context) {
+    final added = [...library.tracks]
+      ..sort((a, b) => (b.dateAdded ?? DateTime(0)).compareTo(a.dateAdded ?? DateTime(0)));
+    final played = [
+      for (final s in Stats.instance.all.where((s) => s.lastPlayed != null).toList()
+        ..sort((a, b) => b.lastPlayed!.compareTo(a.lastPlayed!)))
+        ?library.trackById(s.trackId), // skip songs no longer in the library
+    ];
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _CoverRow(title: 'Recently added', tracks: added.take(10).toList()),
+      if (played.isNotEmpty) _CoverRow(title: 'Recently played', tracks: played.take(10).toList()),
+      const Padding(
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: Text('All songs', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+      ),
+    ]);
+  }
+}
+
+class _CoverRow extends StatelessWidget {
+  final String title;
+  final List<Track> tracks;
+  const _CoverRow({required this.title, required this.tracks});
+
+  static const _art = 120.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final library = Library.instance;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+      ),
+      SizedBox(
+        height: _art + 44,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           itemCount: tracks.length,
-          separatorBuilder: (_, _) => const Divider(height: 1, indent: 80, endIndent: 16),
+          separatorBuilder: (_, _) => const SizedBox(width: 12),
           itemBuilder: (context, i) {
             final track = tracks[i];
-            return TrackTile(
-              track: track,
-              isCurrent: snapshot.data?.id == track.id,
-              trailing: showPlays
-                  ? Text(plural(Stats.instance.of(track.id).playCount, 'play'),
-                      style: const TextStyle(color: AppColors.textSecondary))
-                  : null,
-              // Tap: play the list starting at this song and open Now Playing.
+            return GestureDetector(
               onTap: () {
-                player.playTracks(tracks, index: i);
+                Player.instance.playTracks(tracks, index: i, shuffle: false);
                 openNowPlaying(context);
               },
-              // Long-press: Add to playlist / Rename / Delete.
               onLongPress: () => showSongActions(context, track),
+              child: SizedBox(
+                width: _art,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Stack(children: [
+                    Artwork(imagePath: track.artworkPath, size: _art, radius: 8, name: track.title),
+                    if (library.isNew(track.id))
+                      const Positioned(left: 6, top: 6, child: NewTag()),
+                  ]),
+                  const SizedBox(height: 6),
+                  Text(track.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text(library.artistName(track.artistId),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                ]),
+              ),
             );
           },
         ),
       ),
-    );
+    ]);
   }
 }
 

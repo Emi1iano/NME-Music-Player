@@ -61,10 +61,7 @@ class PlaylistsScreen extends StatelessWidget {
                         final tracks = tracksIn(playlist);
                         return ListTile(
                           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                          leading: Artwork(
-                              imagePath: Library.instance.coverFor(tracks)?.artworkPath,
-                              size: 56,
-                              name: playlist.name),
+                          leading: PlaylistCover(tracks: tracks, name: playlist.name, size: 56),
                           title: Text(playlist.name,
                               style: const TextStyle(fontWeight: FontWeight.w600)),
                           subtitle: Text(plural(tracks.length, 'song'),

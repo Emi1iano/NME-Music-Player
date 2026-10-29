@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show ChangeNotifier, DateUtils;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -20,12 +20,23 @@ class Stats extends ChangeNotifier {
 
   late File _file;                              // playback_stats.json on the phone
   final _byTrack = <String, PlaybackStats>{};   // trackId -> its stats
+  late File _dayFile;                           // listening_by_day.json
+  final _byDay = <String, int>{};               // "2026-10-28" -> seconds listened that day
   Timer? _saveTimer;                            // pending "save to disk" (see _changed)
 
   /// Loads saved stats from disk at startup.
   Future<void> init() async {
     final dir = await getApplicationSupportDirectory();
     _file = File(p.join(dir.path, 'playback_stats.json'));
+    _dayFile = File(p.join(dir.path, 'listening_by_day.json'));
+    if (await _dayFile.exists()) {
+      try {
+        final days = jsonDecode(await _dayFile.readAsString()) as Map<String, dynamic>;
+        days.forEach((day, seconds) => _byDay[day] = seconds as int);
+      } catch (e, st) {
+        AppLog.instance.error('Saved daily listening times were unreadable; starting fresh', e, st);
+      }
+    }
     if (!await _file.exists()) return;
     try {
       final data = jsonDecode(await _file.readAsString()) as List;
@@ -64,6 +75,8 @@ class Stats extends ChangeNotifier {
   /// Adds listening time to a track (the player calls this every second).
   /// PlaybackStats fields are final, so we store an updated copy.
   void addPlaytime(String trackId, int seconds) {
+    final day = dayKey(DateTime.now());
+    _byDay[day] = (_byDay[day] ?? 0) + seconds;
     final s = of(trackId);
     _byTrack[trackId] = s.copyWith(
       playtimeSeconds: s.playtimeSeconds + seconds,
@@ -97,9 +110,24 @@ class Stats extends ChangeNotifier {
     if (_byTrack.remove(trackId) != null) _changed();
   }
 
+  /// Seconds listened on each of the last [days] days, oldest first, ending
+  /// today (days with no listening are 0). For the weekly chart.
+  List<(DateTime, int)> lastDays(int days, {DateTime? now}) {
+    final today = DateUtils.dateOnly(now ?? DateTime.now());
+    return [
+      for (var i = days - 1; i >= 0; i--)
+        (today.subtract(Duration(days: i)), _byDay[dayKey(today.subtract(Duration(days: i)))] ?? 0),
+    ];
+  }
+
+  /// "2026-10-28": the key a day's listening time is saved under (local time).
+  static String dayKey(DateTime time) =>
+      '${time.year}-${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')}';
+
   /// Clears everything (the reset button on the Listening Stats screen).
   Future<void> reset() async {
     _byTrack.clear();
+    _byDay.clear();
     _changed();
     await flush();
   }
@@ -118,5 +146,9 @@ class Stats extends ChangeNotifier {
     _saveTimer?.cancel();
     _saveTimer = null;
     await _file.writeAsString(jsonEncode([for (final s in all) s.toMap()]));
+    // Keep a year of daily totals; older days aren't shown anywhere.
+    final cutoff = dayKey(DateTime.now().subtract(const Duration(days: 366)));
+    _byDay.removeWhere((day, _) => day.compareTo(cutoff) < 0);
+    await _dayFile.writeAsString(jsonEncode(_byDay));
   }
 }

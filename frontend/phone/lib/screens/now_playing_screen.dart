@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -33,7 +34,8 @@ class NowPlayingScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final player = Player.instance;
     return Scaffold(
-      body: SafeArea(
+      body: _Backdrop(
+        child: SafeArea(
         // Swipe down (quickly) anywhere to close, like the ✕ button.
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
@@ -61,7 +63,13 @@ class NowPlayingScreen extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  Artwork(imagePath: track?.artworkPath, size: artSize, radius: 12, name: track?.title),
+                  // Same Hero tag as the mini player's cover, so the small
+                  // cover grows into this one when Now Playing opens.
+                  Hero(
+                    tag: nowPlayingArtTag,
+                    child: Artwork(
+                        imagePath: track?.artworkPath, size: artSize, radius: 12, name: track?.title),
+                  ),
                   const Spacer(),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -84,7 +92,163 @@ class NowPlayingScreen extends StatelessWidget {
           ),
         ),
       ),
+      ),
     );
+  }
+}
+
+/// Hero tag shared by the mini player's cover and Now Playing's big cover.
+const nowPlayingArtTag = 'now-playing-art';
+
+/// Now Playing's background: the main color of the song's cover (or of its
+/// placeholder tile), fading into the app's background. Changes smoothly
+/// when the song changes.
+class _Backdrop extends StatelessWidget {
+  final Widget child;
+  const _Backdrop({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final player = Player.instance;
+    return StreamBuilder<Track?>(
+      stream: player.currentTrackStream,
+      initialData: player.currentTrack,
+      builder: (context, snap) {
+        final track = snap.data;
+        return FutureBuilder<Color>(
+          // Keyed by song so the previous color isn't reused for a new song.
+          key: ValueKey(track?.id),
+          future: track == null
+              ? Future.value(AppColors.surfaceHigh)
+              : coverColor(imagePath: track.artworkPath, name: track.title),
+          builder: (context, colorSnap) {
+            final color = _tone(colorSnap.data ?? AppColors.surfaceHigh);
+            return TweenAnimationBuilder<Color?>(
+              tween: ColorTween(end: color),
+              duration: const Duration(milliseconds: 600),
+              builder: (context, c, _) => DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [c ?? color, AppColors.background],
+                    stops: const [0.0, 0.85],
+                  ),
+                ),
+                child: child,
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// A darker, calmer version of [c], so white text stays readable on it.
+  static Color _tone(Color c) {
+    final hsl = HSLColor.fromColor(c);
+    return hsl
+        .withLightness(hsl.lightness.clamp(0.18, 0.30))
+        .withSaturation(hsl.saturation.clamp(0.0, 0.55))
+        .toColor();
+  }
+}
+
+/// Text that slowly scrolls sideways when it's too long to fit (pausing at
+/// the start), instead of being cut off with "…".
+class _Marquee extends StatefulWidget {
+  final String text;
+  final TextStyle style;
+  const _Marquee({required this.text, required this.style});
+
+  @override
+  State<_Marquee> createState() => _MarqueeState();
+}
+
+class _MarqueeState extends State<_Marquee> with SingleTickerProviderStateMixin {
+  late final _controller = AnimationController(vsync: this);
+  static const _gap = 48.0;           // space between the end and the repeat
+  static const _speed = 30.0;         // pixels per second
+  static const _pause = Duration(seconds: 2);
+  Timer? _restart;
+  double _scroll = 0;                 // how far one loop scrolls (0: fits, no scrolling)
+
+  @override
+  void didUpdateWidget(_Marquee old) {
+    super.didUpdateWidget(old);
+    if (old.text != widget.text) {
+      _restart?.cancel();
+      _controller.stop();
+      _controller.value = 0;
+      _scroll = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _restart?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _start(double scroll) {
+    if (scroll == _scroll) return;
+    _scroll = scroll;
+    _restart?.cancel();
+    _controller.stop();
+    _controller.value = 0;
+    if (scroll <= 0) return;
+    _controller.duration = Duration(milliseconds: (scroll / _speed * 1000).round());
+    void loop() {
+      _restart = Timer(_pause, () {
+        if (!mounted) return;
+        _controller.forward(from: 0).whenComplete(() {
+          if (mounted) loop();
+        });
+      });
+    }
+    loop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final painter = TextPainter(
+        text: TextSpan(text: widget.text, style: widget.style),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final textWidth = painter.width;
+      final fits = textWidth <= constraints.maxWidth;
+      // Start/stop after this frame (can't change animations mid-build).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _start(fits ? 0 : textWidth + _gap);
+      });
+      final text = Text(widget.text, style: widget.style, maxLines: 1, softWrap: false);
+      if (fits) return text;
+      return SizedBox(
+        height: painter.height,
+        child: ClipRect(
+          child: AnimatedBuilder(
+            animation: _controller,
+            builder: (context, child) => OverflowBox(
+              alignment: Alignment.centerLeft,
+              maxWidth: double.infinity,
+              child: Transform.translate(
+                offset: Offset(-_controller.value * (textWidth + _gap), 0),
+                child: child,
+              ),
+            ),
+            // The text twice in a row, so it wraps around seamlessly.
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              text,
+              const SizedBox(width: _gap),
+              text,
+            ]),
+          ),
+        ),
+      );
+    });
   }
 }
 
@@ -104,9 +268,8 @@ class _TitleRow extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(track?.title ?? 'Not playing',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              _Marquee(
+                  text: track?.title ?? 'Not playing',
                   style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
               const SizedBox(height: 2),
               Text(track == null ? '' : library.artistName(track.artistId),
@@ -162,6 +325,16 @@ class _TitleRow extends StatelessWidget {
             onTap: () {
               Navigator.pop(sheetContext);
               renameSongFile(context, track);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.bedtime_outlined),
+            title: const Text('Sleep timer'),
+            subtitle: Text(_sleepTimerText(),
+                style: const TextStyle(color: AppColors.textSecondary)),
+            onTap: () {
+              Navigator.pop(sheetContext);
+              showSleepTimer(context);
             },
           ),
           ListTile(
@@ -397,6 +570,23 @@ class _BottomRow extends StatelessWidget {
           icon: const Icon(Icons.format_list_bulleted_rounded),
           onPressed: () => _showQueue(context),
         ),
+        // Moon: the sleep timer. Lit up (with the minutes left) when it's on.
+        ListenableBuilder(
+          listenable: Listenable.merge([Player.instance.sleepAt, Player.instance.sleepAfterSong]),
+          builder: (context, _) {
+            final on = Player.instance.sleepAt.value != null ||
+                Player.instance.sleepAfterSong.value;
+            return TextButton.icon(
+              onPressed: () => showSleepTimer(context),
+              icon: Icon(on ? Icons.bedtime_rounded : Icons.bedtime_outlined,
+                  color: on ? AppColors.accent : AppColors.textPrimary),
+              label: on
+                  ? Text(_sleepTimerText(short: true),
+                      style: const TextStyle(color: AppColors.accent))
+                  : const SizedBox.shrink(),
+            );
+          },
+        ),
         // Placeholder: Flutter can't open the AirPlay/Bluetooth picker without
         // an extra plugin, so for now this just tells the user where to find it.
         IconButton(
@@ -413,7 +603,8 @@ class _BottomRow extends StatelessWidget {
   }
 
   /// "Up next" sheet: the queue in play order (shuffled order if shuffle is
-  /// on). Tap a song to jump to it.
+  /// on). Tap a song to jump to it, drag the handle to reorder (shuffle off),
+  /// swipe left to remove it from the queue.
   void _showQueue(BuildContext context) {
     final player = Player.instance;
     showModalBottomSheet<void>(
@@ -427,22 +618,59 @@ class _BottomRow extends StatelessWidget {
           stream: player.audio.sequenceStateStream,
           initialData: player.audio.sequenceState,
           builder: (context, _) {
+            final shuffled = player.audio.shuffleModeEnabled;
             final order = player.audio.effectiveIndices;
             final current = player.audio.currentIndex;
-            return ListView.builder(
-              controller: scrollController,
-              itemCount: order.length + 1,
-              itemBuilder: (context, i) {
-                if (i == 0) {
-                  return const Padding(
-                    padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
-                    child: Text('Up next',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                  );
-                }
-                final index = order[i - 1];
-                final track = player.queue[index];
-                final isCurrent = index == current;
+            return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Up next',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                  Text(
+                    shuffled
+                        ? 'Swipe left to remove. Turn shuffle off to reorder.'
+                        : 'Drag ≡ to reorder, swipe left to remove.',
+                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                  ),
+                ]),
+              ),
+              Expanded(
+                child: ReorderableListView.builder(
+                  scrollController: scrollController,
+                  buildDefaultDragHandles: false,
+                  itemCount: order.length,
+                  onReorderItem: (from, to) => player.moveInQueue(order[from], order[to]),
+                  itemBuilder: (context, i) {
+                    final index = order[i];
+                    final track = player.queue[index];
+                    final isCurrent = index == current;
+                    return Dismissible(
+                      // Position + song: a song can be in the queue twice.
+                      key: ValueKey('$index:${track.id}'),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        color: Colors.redAccent.withValues(alpha: 0.25),
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 24),
+                        child: const Icon(Icons.remove_circle_outline_rounded),
+                      ),
+                      onDismissed: (_) => player.removeFromQueue(index),
+                      child: _queueTile(player, track, isCurrent, index, i, shuffled),
+                    );
+                  },
+                ),
+              ),
+            ]);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// One row of the "Up next" sheet.
+  Widget _queueTile(
+      Player player, Track track, bool isCurrent, int index, int position, bool shuffled) {
                 return ListTile(
                   leading: Artwork(imagePath: track.artworkPath, size: 40, radius: 4, name: track.title),
                   title: Text(track.title,
@@ -455,16 +683,79 @@ class _BottomRow extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: AppColors.textSecondary)),
-                  trailing: isCurrent
-                      ? const Icon(Icons.graphic_eq_rounded, color: AppColors.accent)
-                      : null,
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (isCurrent) const Icon(Icons.graphic_eq_rounded, color: AppColors.accent),
+                    if (!shuffled)
+                      ReorderableDragStartListener(
+                        index: position,
+                        child: const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Icon(Icons.drag_handle_rounded, color: AppColors.textSecondary),
+                        ),
+                      ),
+                  ]),
                   onTap: () => player.jumpTo(index),
                 );
-              },
-            );
-          },
-        ),
-      ),
-    );
   }
+}
+
+/// "Sleep in 23 min" / "At the end of this song" / "Off" (or "23 min" /
+/// "End of song" for the small label next to the moon).
+String _sleepTimerText({bool short = false}) {
+  final player = Player.instance;
+  if (player.sleepAfterSong.value) return short ? 'End of song' : 'At the end of this song';
+  final at = player.sleepAt.value;
+  if (at == null) return 'Off';
+  final minutes = (at.difference(DateTime.now()).inSeconds / 60).ceil().clamp(1, 999);
+  return short ? '$minutes min' : 'Stops in $minutes min';
+}
+
+/// Sleep timer choices: pause after 15/30/45/60 minutes or at the end of the
+/// current song.
+void showSleepTimer(BuildContext context) {
+  final player = Player.instance;
+  final on = player.sleepAt.value != null || player.sleepAfterSong.value;
+  void pick(BuildContext sheetContext, Duration? duration, String label) {
+    Navigator.pop(sheetContext);
+    player.setSleepTimer(duration);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sleep timer: $label')));
+  }
+
+  showModalBottomSheet<void>(
+    context: context,
+    builder: (sheetContext) => SafeArea(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+          child: Row(children: [
+            const Expanded(
+              child: Text('Sleep timer',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            ),
+            Text(_sleepTimerText(), style: const TextStyle(color: AppColors.textSecondary)),
+          ]),
+        ),
+        for (final minutes in const [15, 30, 45, 60])
+          ListTile(
+            leading: const Icon(Icons.timer_outlined),
+            title: Text('$minutes minutes'),
+            onTap: () => pick(sheetContext, Duration(minutes: minutes), '$minutes minutes'),
+          ),
+        ListTile(
+          leading: const Icon(Icons.music_off_outlined),
+          title: const Text('End of this song'),
+          onTap: () => pick(sheetContext, null, 'end of this song'),
+        ),
+        if (on)
+          ListTile(
+            leading: const Icon(Icons.close_rounded),
+            title: const Text('Turn off'),
+            onTap: () {
+              Navigator.pop(sheetContext);
+              player.cancelSleepTimer();
+            },
+          ),
+      ]),
+    ),
+  );
 }
