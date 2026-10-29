@@ -10,6 +10,7 @@ import '../services/backend.dart';
 import '../services/library.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/glass.dart';
 import '../widgets/sync_sheet.dart';
 import 'debug_log_screen.dart';
 import 'stats_screen.dart';
@@ -37,7 +38,7 @@ class SettingsScreen extends StatelessWidget {
     final library = Library.instance;
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
-      body: ListenableBuilder(
+      body: withGlassGlow(ListenableBuilder(
         listenable: library,
         builder: (context, _) => ListView(
           children: [
@@ -152,7 +153,7 @@ class SettingsScreen extends StatelessWidget {
             ),
           ],
         ),
-      ),
+      )),
     );
   }
 }
@@ -323,6 +324,55 @@ class _AppearanceSection extends StatelessWidget {
               ),
           ]),
         ),
+        // Background: a row of swatches (dark colors look alike, so each has
+        // a thin outline), then Glass style.
+        ListTile(
+          leading: const Icon(Icons.format_color_fill_rounded),
+          title: const Text('Background'),
+          subtitle: Text(
+            Appearance.backgroundChoices
+                    .where((c) => c.$2.toARGB32() == a.background.toARGB32())
+                    .firstOrNull
+                    ?.$1 ??
+                'Custom',
+            style: const TextStyle(color: AppColors.textSecondary),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(72, 0, 16, 12),
+          child: Wrap(spacing: 12, runSpacing: 12, children: [
+            for (final (name, color) in Appearance.backgroundChoices)
+              Semantics(
+                button: true,
+                selected: color.toARGB32() == a.background.toARGB32(),
+                label: '$name background',
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => a.background = color,
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: color.toARGB32() == a.background.toARGB32()
+                            ? AppColors.accent
+                            : AppColors.textSecondary.withValues(alpha: 0.5),
+                        width: color.toARGB32() == a.background.toARGB32() ? 2.5 : 1,
+                      ),
+                    ),
+                    child: color.toARGB32() == a.background.toARGB32()
+                        ? const Icon(Icons.check_rounded, size: 20, color: AppColors.textPrimary)
+                        : null,
+                  ),
+                ),
+              ),
+          ]),
+        ),
+        toggle(Icons.blur_on_rounded, 'Glass style',
+            'A glow of your accent color behind frosted, see-through cards and bars',
+            a.glass, (v) => a.glass = v),
         toggle(Icons.density_small_rounded, 'Compact song rows',
             'Smaller rows, more songs on screen', a.compactRows, (v) => a.compactRows = v),
         toggle(Icons.abc_rounded, 'Colored letter tiles',

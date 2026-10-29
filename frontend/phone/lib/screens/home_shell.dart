@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../services/appearance.dart';
+import '../widgets/glass.dart';
 import '../widgets/mini_player.dart';
 import 'albums_screen.dart';
 import 'artists_screen.dart';
@@ -20,9 +22,11 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // Glass style: the screen (and its glow) runs under the frosted bars.
+      extendBody: Appearance.instance.glass,
       // IndexedStack keeps all four tabs alive and only shows one, so each tab
       // remembers its scroll position and search text when you switch away.
-      body: IndexedStack(
+      body: withGlassGlow(IndexedStack(
         index: _tab,
         children: const [
           SongsScreen(),
@@ -30,10 +34,10 @@ class _HomeShellState extends State<HomeShell> {
           ArtistsScreen(),
           PlaylistsScreen(),
         ],
-      ),
+      )),
       // Bottom area = mini player (only visible while a song is loaded)
-      // stacked on top of the tab bar.
-      bottomNavigationBar: Column(
+      // stacked on top of the tab bar. Frosted glass in Glass style.
+      bottomNavigationBar: Frosted(child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           const MiniPlayer(),
@@ -49,7 +53,7 @@ class _HomeShellState extends State<HomeShell> {
             ],
           ),
         ],
-      ),
+      )),
     );
   }
 }

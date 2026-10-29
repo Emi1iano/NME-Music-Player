@@ -176,7 +176,8 @@ class _SongsScreenState extends State<SongsScreen> {
                 },
               ),
             ),
-            const SliverToBoxAdapter(child: SizedBox(height: 8)),
+            // Room for the bottom bar when the list runs under it (Glass style).
+            SliverToBoxAdapter(child: SizedBox(height: 8 + MediaQuery.paddingOf(context).bottom)),
           ],
         ),
       ),

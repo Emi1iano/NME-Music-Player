@@ -5,16 +5,25 @@ import 'services/appearance.dart';
 // All the app's colors in one place, so the look can be changed by editing
 // this file only. (0xFF = fully opaque, then the usual RRGGBB hex color.)
 class AppColors {
-  static const background = Color(0xFF0E0E11);
-  static const surface = Color(0xFF1A1A1F);
-  static const surfaceHigh = Color(0xFF26262D);
+  // The background is picked in Settings → Appearance; cards ("surface"),
+  // raised parts ("surfaceHigh") and lines are the same color, a little
+  // lighter. In Glass style, cards and raised parts are see-through.
+  static Color get background => Appearance.instance.background;
+  static Color get surface => _glassy(_lighter(0.05), 0.70);
+  static Color get surfaceHigh => _glassy(_lighter(0.10), 0.72);
+  // Sheets and dialogs sit on top of other content, so they stay nearly solid.
+  static Color get sheet => _glassy(_lighter(0.05), 0.92);
   // The accent is picked in Settings → Appearance, so it isn't a constant.
   static Color get accent => Appearance.instance.accent;
   // Text/icons drawn ON the accent: white or near-black, whichever reads better.
   static Color get onAccent => _readableOn(accent);
   static const textPrimary = Color(0xFFF2F2F5);
   static const textSecondary = Color(0xFF9A9AA5);
-  static const divider = Color(0xFF2A2A31);
+  static Color get divider => _lighter(0.12);
+
+  static Color _lighter(double amount) => Color.lerp(background, Colors.white, amount)!;
+  static Color _glassy(Color c, double alpha) =>
+      Appearance.instance.glass ? c.withValues(alpha: alpha) : c;
 
   static Color _readableOn(Color c) {
     final l = c.computeLuminance();
@@ -47,7 +56,7 @@ ThemeData buildDarkTheme() {
     colorScheme: scheme,
     scaffoldBackgroundColor: AppColors.background,
     dividerColor: AppColors.divider,
-    appBarTheme: const AppBarTheme(
+    appBarTheme: AppBarTheme(
       backgroundColor: AppColors.background,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
@@ -70,20 +79,20 @@ ThemeData buildDarkTheme() {
                 : AppColors.textSecondary,
           )),
     ),
-    sliderTheme: const SliderThemeData(
+    sliderTheme: SliderThemeData(
       trackHeight: 4,
       activeTrackColor: AppColors.textPrimary,
       inactiveTrackColor: AppColors.surfaceHigh,
       thumbColor: AppColors.textPrimary,
-      overlayShape: RoundSliderOverlayShape(overlayRadius: 14),
-      thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
+      overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
     ),
-    bottomSheetTheme: const BottomSheetThemeData(
-      backgroundColor: AppColors.surface,
+    bottomSheetTheme: BottomSheetThemeData(
+      backgroundColor: AppColors.sheet,
       surfaceTintColor: Colors.transparent,
       showDragHandle: true,
     ),
-    dialogTheme: const DialogThemeData(backgroundColor: AppColors.surface),
+    dialogTheme: DialogThemeData(backgroundColor: AppColors.sheet),
     snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
   );
 }

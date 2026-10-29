@@ -12,6 +12,7 @@ import '../services/stats.dart';
 import '../theme.dart';
 import '../widgets/artwork.dart';
 import '../widgets/common.dart';
+import '../widgets/glass.dart';
 
 /// Opens the full-screen player. Any screen can call this.
 void openNowPlaying(BuildContext context) {
@@ -129,7 +130,10 @@ class _Backdrop extends StatelessWidget {
       listenable: Appearance.instance,
       builder: (context, _) => Appearance.instance.coverColors
           ? _tinted(player)
-          : ColoredBox(color: AppColors.background, child: child), // "Cover colors" off
+          // "Cover colors" off: the glass glow, or the plain background.
+          : Appearance.instance.glass
+              ? withGlassGlow(child)
+              : ColoredBox(color: AppColors.background, child: child),
     );
   }
 
@@ -538,7 +542,7 @@ class _Controls extends StatelessWidget {
                 iconSize: 44,
                 onPressed: player.togglePlay,
                 icon: loading && state.playing
-                    ? const SizedBox(
+                    ? SizedBox(
                         width: 28,
                         height: 28,
                         child: CircularProgressIndicator(

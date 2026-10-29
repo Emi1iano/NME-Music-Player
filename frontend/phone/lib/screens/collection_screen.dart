@@ -5,6 +5,7 @@ import '../services/player.dart';
 import '../theme.dart';
 import '../widgets/artwork.dart';
 import '../widgets/common.dart';
+import '../widgets/glass.dart';
 import '../widgets/track_tile.dart';
 import 'now_playing_screen.dart';
 
@@ -36,7 +37,7 @@ class CollectionScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(),
-      body: StreamBuilder<Track?>(
+      body: withGlassGlow(StreamBuilder<Track?>(
         stream: player.currentTrackStream,
         initialData: player.currentTrack,
         builder: (context, snapshot) => ListView.builder(
@@ -106,7 +107,7 @@ class CollectionScreen extends StatelessWidget {
             );
           },
         ),
-      ),
+      )),
     );
   }
 }

@@ -5,6 +5,7 @@ import '../services/stats.dart';
 import '../theme.dart';
 import '../widgets/artwork.dart';
 import '../widgets/common.dart';
+import '../widgets/glass.dart';
 
 /// Totals plus the most-played songs, from PlaybackStats.
 class StatsScreen extends StatelessWidget {
@@ -41,7 +42,7 @@ class StatsScreen extends StatelessWidget {
       ),
       // Listenable.merge = rebuild when EITHER the stats or the library change,
       // so the numbers update live while a song plays.
-      body: ListenableBuilder(
+      body: withGlassGlow(ListenableBuilder(
         listenable: Listenable.merge([stats, library]),
         builder: (context, _) {
           // Only show songs that are still in the Music folder.
@@ -118,7 +119,7 @@ class StatsScreen extends StatelessWidget {
             ],
           );
         },
-      ),
+      )),
     );
   }
 }

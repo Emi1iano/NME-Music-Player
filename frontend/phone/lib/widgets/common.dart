@@ -34,7 +34,7 @@ class PlayShuffleButtons extends StatelessWidget {
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.accent,
               backgroundColor: AppColors.surface,
-              side: const BorderSide(color: AppColors.divider),
+              side: BorderSide(color: AppColors.divider),
               shape: const StadiumBorder(),
               padding: const EdgeInsets.symmetric(vertical: 12),
               textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
@@ -88,7 +88,7 @@ class LibrarySearchBar extends StatelessWidget {
               ),
           ],
           elevation: const WidgetStatePropertyAll(0),
-          backgroundColor: const WidgetStatePropertyAll(AppColors.surface),
+          backgroundColor: WidgetStatePropertyAll(AppColors.surface),
           onChanged: onChanged,
         ),
       ),

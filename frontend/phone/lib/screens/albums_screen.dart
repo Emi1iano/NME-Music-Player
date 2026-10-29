@@ -77,7 +77,8 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
               )
             else
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                // Extra bottom room when the grid runs under the bottom bar (Glass style).
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + MediaQuery.paddingOf(context).bottom),
                 sliver: SliverGrid.builder(
                   // Cards are at most 220px wide: 2 columns on a phone,
                   // more on a tablet, automatically.

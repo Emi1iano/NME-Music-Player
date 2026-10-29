@@ -24,6 +24,31 @@ class Appearance extends ChangeNotifier {
     ('Red', Color(0xFFFF5C5C)),
   ];
 
+  /// Background choices (Settings → Appearance → Background). All dark, so
+  /// the light text stays readable; cards and sheets are derived from it.
+  static const backgroundChoices = <(String, Color)>[
+    ('Midnight', Color(0xFF0E0E11)),
+    ('Black', Color(0xFF000000)),
+    ('Navy', Color(0xFF0B1022)),
+    ('Plum', Color(0xFF17101F)),
+    ('Forest', Color(0xFF0C1712)),
+    ('Mocha', Color(0xFF1A1411)),
+    ('Slate', Color(0xFF161A20)),
+  ];
+
+  /// The app's main background color.
+  Color get background =>
+      Color(_prefs?.getInt('appearance_background') ?? backgroundChoices.first.$2.toARGB32());
+  set background(Color color) {
+    _prefs?.setInt('appearance_background', color.toARGB32());
+    notifyListeners();
+  }
+
+  /// Glass style: a soft glow of the accent color behind the app, with
+  /// see-through frosted cards, tab bar and mini player. Off by default.
+  bool get glass => _get('glass', fallback: false);
+  set glass(bool on) => _set('glass', on);
+
   /// The app's main color (buttons, highlights, the playing song...).
   Color get accent => Color(_prefs?.getInt('appearance_accent') ?? accentChoices.first.$2.toARGB32());
   set accent(Color color) {

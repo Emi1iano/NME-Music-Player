@@ -9,6 +9,7 @@ import '../services/playlists.dart';
 import '../theme.dart';
 import '../widgets/artwork.dart';
 import '../widgets/common.dart';
+import '../widgets/glass.dart';
 import 'now_playing_screen.dart';
 
 /// The Playlists tab: a list of your playlists plus a + button to make one.
@@ -141,7 +142,7 @@ class PlaylistDetailScreen extends StatelessWidget {
               ),
             ],
           ),
-          body: Column(
+          body: withGlassGlow(Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               PlayShuffleButtons(
@@ -166,7 +167,7 @@ class PlaylistDetailScreen extends StatelessWidget {
                     : _PlaylistTracks(playlist: playlist, tracks: tracks),
               ),
             ],
-          ),
+          )),
         );
       },
     );
