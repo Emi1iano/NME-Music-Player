@@ -101,29 +101,51 @@ class Player {
 
   /// Hands the whole queue to just_audio, starting at [start].
   Future<void> _load(int start) async {
-    final library = Library.instance;
-    // Hand the whole list to the player as a queue. Each song gets a
-    // MediaItem "tag" — that's the title/artist/art shown on the lock screen
-    // and in the notification.
     await audio.setAudioSources(
-      [
-        for (final track in _queue)
-          AudioSource.file(
-            track.audioUrl,
-            tag: MediaItem(
-              id: track.id,
-              title: track.title,
-              artist: library.artistName(track.artistId),
-              album: library.albumTitle(track.albumId),
-              duration: track.durationSeconds > 0
-                  ? Duration(seconds: track.durationSeconds)
-                  : null,
-              artUri: track.artworkPath == null ? null : Uri.file(track.artworkPath!),
-            ),
-          ),
-      ],
+      [for (final track in _queue) _sourceFor(track)],
       initialIndex: start,
     );
+  }
+
+  /// One song for just_audio. The MediaItem "tag" is the title/artist/art
+  /// shown on the lock screen and in the notification.
+  AudioSource _sourceFor(Track track) {
+    final library = Library.instance;
+    return AudioSource.file(
+      track.audioUrl,
+      tag: MediaItem(
+        id: track.id,
+        title: track.title,
+        artist: library.artistName(track.artistId),
+        album: library.albumTitle(track.albumId),
+        duration: track.durationSeconds > 0 ? Duration(seconds: track.durationSeconds) : null,
+        artUri: track.artworkPath == null ? null : Uri.file(track.artworkPath!),
+      ),
+    );
+  }
+
+  /// "Play next": puts [track] right after the current song. Plays it now
+  /// if nothing is loaded. (With shuffle on, just_audio picks where it lands
+  /// in the shuffled order.)
+  Future<void> playNext(Track track) async {
+    final current = audio.currentIndex;
+    if (_queue.isEmpty || current == null) {
+      await playTracks([track], index: 0, shuffle: false);
+      return;
+    }
+    _queue.insert(current + 1, track);
+    await audio.insertAudioSource(current + 1, _sourceFor(track));
+  }
+
+  /// "Add to queue": puts [track] at the end of the queue. Plays it now if
+  /// nothing is loaded.
+  Future<void> addToQueue(Track track) async {
+    if (_queue.isEmpty || audio.currentIndex == null) {
+      await playTracks([track], index: 0, shuffle: false);
+      return;
+    }
+    _queue.add(track);
+    await audio.addAudioSource(_sourceFor(track));
   }
 
   /// Jumps to a track already in the queue (by its original index).
@@ -176,6 +198,9 @@ class Player {
   void _startNewListen() {
     _listenedThisPlay = 0;
     _countedThisPlay = false;
+    // Playing a song that came from a sync clears its "NEW" tag.
+    final track = currentTrack;
+    if (track != null) Library.instance.clearNew(track.id);
   }
 
   /// Called every second: adds listening time while audio is actually playing,

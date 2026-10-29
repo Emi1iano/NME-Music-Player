@@ -80,6 +80,10 @@ class Backend extends ChangeNotifier {
   /// deleted by the other device), so the library can rescan. Set by Library.
   VoidCallback? onFilesChanged;
 
+  /// Called with the file name of each song that arrives from the other
+  /// device (for the "NEW" tag). Set by Library.
+  void Function(String name)? onSongReceived;
+
   // Where the backend keeps the key: testing/app/ while its TESTING flag is
   // on, app/ otherwise. The old backend used app/cache/.
   List<File> get _keyFiles => [
@@ -430,7 +434,10 @@ class Backend extends ChangeNotifier {
         const prefix = 'Successfully recieved song ';
         if (line.startsWith(prefix)) {
           final name = line.substring(prefix.length).trim();
-          if (name.isNotEmpty) receivedSongs.add(name);
+          if (name.isNotEmpty) {
+            receivedSongs.add(name);
+            onSongReceived?.call(name);
+          }
         }
         _filesChanged();
       } else if (line.startsWith('Hashes dont match')) {

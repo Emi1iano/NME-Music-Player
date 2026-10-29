@@ -55,6 +55,7 @@ class _SyncSheet extends StatefulWidget {
 
 class _SyncSheetState extends State<_SyncSheet> {
   final _message = TextEditingController(); // "Send test message" box
+  bool _showDetails = false; // the backend's raw messages, hidden by default
 
   @override
   void dispose() {
@@ -130,8 +131,52 @@ class _SyncSheetState extends State<_SyncSheet> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text('Sync', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 16),
+                Row(children: [
+                  const Expanded(
+                    child: Text('Sync',
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                  ),
+                  // Less common actions live here so the panel stays simple.
+                  PopupMenuButton<_MoreAction>(
+                    tooltip: 'More options',
+                    icon: const Icon(Icons.more_horiz_rounded),
+                    onSelected: (action) => switch (action) {
+                      _MoreAction.otherKey => _syncWithKey(context),
+                      _MoreAction.newKey => confirmNewKey(context),
+                      _MoreAction.debugLog => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const DebugLogScreen())),
+                    },
+                    itemBuilder: (_) => [
+                      PopupMenuItem(
+                        value: _MoreAction.otherKey,
+                        enabled: !busy,
+                        child: const ListTile(
+                          leading: Icon(Icons.key_rounded),
+                          title: Text("Use another device's key"),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: _MoreAction.newKey,
+                        enabled: !busy,
+                        child: const ListTile(
+                          leading: Icon(Icons.autorenew_rounded),
+                          title: Text('Generate new key'),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: _MoreAction.debugLog,
+                        child: ListTile(
+                          leading: Icon(Icons.bug_report_outlined),
+                          title: Text('Open Debug log'),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                    ],
+                  ),
+                ]),
+                const SizedBox(height: 8),
                 // This phone's key, big enough to read out to someone.
                 Row(children: [
                   Expanded(
@@ -170,7 +215,19 @@ class _SyncSheetState extends State<_SyncSheet> {
                   _ReceivedSongs(names: backend.receivedSongs),
                 ],
                 if (backend.syncLines.isNotEmpty) ...[
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => setState(() => _showDetails = !_showDetails),
+                      icon: Icon(_showDetails
+                          ? Icons.expand_less_rounded
+                          : Icons.expand_more_rounded),
+                      label: Text(_showDetails ? 'Hide details' : 'Show details'),
+                    ),
+                  ),
+                ],
+                if (_showDetails && backend.syncLines.isNotEmpty) ...[
                   // The backend's own messages for this sync, newest last.
                   Container(
                     constraints: const BoxConstraints(maxHeight: 160),
@@ -237,26 +294,7 @@ class _SyncSheetState extends State<_SyncSheet> {
                     label: const Text('Sync now'),
                     style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
                   ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: busy ? null : () => _syncWithKey(context),
-                  icon: const Icon(Icons.key_rounded),
-                  label: const Text("Use another device's key"),
-                ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: busy ? null : () => confirmNewKey(context),
-                  icon: const Icon(Icons.autorenew_rounded),
-                  label: const Text('Generate new key'),
-                ),
-                const SizedBox(height: 4),
-                TextButton.icon(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const DebugLogScreen()),
-                  ),
-                  icon: const Icon(Icons.bug_report_outlined, size: 18),
-                  label: const Text('Open Debug log'),
-                ),
+                const SizedBox(height: 12),
                 const Text(
                   'Both devices tap Sync now with the same key. Once connected, each '
                   'side sends its new, renamed and deleted songs, and the connection '
@@ -288,6 +326,9 @@ String? _progress(Backend b) {
   }
   return parts.isEmpty ? null : parts.join('  •  ');
 }
+
+/// The ⋯ menu in the Sync panel.
+enum _MoreAction { otherKey, newKey, debugLog }
 
 /// Under the key: "3 changes waiting to sync  •  Last synced 5 min ago".
 /// Also used in Settings.

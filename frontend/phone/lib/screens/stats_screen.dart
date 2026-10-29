@@ -89,7 +89,7 @@ class StatsScreen extends StatelessWidget {
                                 color: AppColors.textSecondary, fontWeight: FontWeight.w700)),
                       ),
                       const SizedBox(width: 8),
-                      Artwork(imagePath: track.artworkPath, size: 44),
+                      Artwork(imagePath: track.artworkPath, size: 44, name: track.title),
                     ]),
                     title: Text(track.title,
                         maxLines: 1,

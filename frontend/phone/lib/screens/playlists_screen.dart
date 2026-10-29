@@ -63,7 +63,8 @@ class PlaylistsScreen extends StatelessWidget {
                           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
                           leading: Artwork(
                               imagePath: Library.instance.coverFor(tracks)?.artworkPath,
-                              size: 56),
+                              size: 56,
+                              name: playlist.name),
                           title: Text(playlist.name,
                               style: const TextStyle(fontWeight: FontWeight.w600)),
                           subtitle: Text(plural(tracks.length, 'song'),
@@ -209,7 +210,7 @@ class _PlaylistTracks extends StatelessWidget {
           onDismissed: (_) => playlists.removeTrack(playlist, track.id),
           child: ListTile(
             contentPadding: const EdgeInsets.only(left: 16, right: 4),
-            leading: Artwork(imagePath: track.artworkPath, size: 48),
+            leading: Artwork(imagePath: track.artworkPath, size: 48, name: track.title),
             title: Text(track.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

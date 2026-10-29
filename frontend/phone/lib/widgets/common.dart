@@ -340,6 +340,26 @@ void showSongActions(BuildContext context, Track track) {
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
         ),
         ListTile(
+          leading: const Icon(Icons.queue_play_next_rounded),
+          title: const Text('Play next'),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            Player.instance.playNext(track);
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text('${track.title} plays next')));
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.add_to_queue_rounded),
+          title: const Text('Add to queue'),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            Player.instance.addToQueue(track);
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text('Added ${track.title} to the queue')));
+          },
+        ),
+        ListTile(
           leading: const Icon(Icons.playlist_add_rounded),
           title: const Text('Add to playlist'),
           onTap: () {

@@ -46,7 +46,11 @@ class CollectionScreen extends StatelessWidget {
           itemBuilder: (context, i) {
             if (i == 0) {
               return Column(children: [
-                Artwork(imagePath: imagePath, size: artSize, radius: roundArt ? artSize / 2 : 12),
+                Artwork(
+                    imagePath: imagePath,
+                    size: artSize,
+                    radius: roundArt ? artSize / 2 : 12,
+                    name: title),
                 const SizedBox(height: 16),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),

@@ -72,12 +72,28 @@ class _SongsScreenState extends State<SongsScreen> {
                     : () => player.playTracks(tracks, index: 0, shuffle: false),
                 onShuffle: tracks.isEmpty ? null : () => player.playTracks(tracks, shuffle: true),
               ),
+              // "24 songs • 1 hr 32 min" for the list below (or the matches).
+              if (tracks.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                  child: Text(
+                    _countLine(tracks),
+                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                  ),
+                ),
               Expanded(child: _buildList(context, library, tracks)),
             ],
           );
         },
       ),
     );
+  }
+
+  /// "24 songs • 1 hr 32 min" (length left out if no song knows its length).
+  String _countLine(List<Track> tracks) {
+    final seconds = tracks.fold(0, (sum, t) => sum + t.durationSeconds);
+    final count = plural(tracks.length, 'song');
+    return seconds > 0 ? '$count  •  ${formatListenTime(seconds)}' : count;
   }
 
   /// The song list, or a spinner / empty message / "No matches" instead.
@@ -166,17 +182,18 @@ class _TopBar extends StatelessWidget {
               // The badge counts changes the next sync will send.
               final pending = backend.pendingChanges;
               return IconButton(
-                tooltip: pending > 0 ? 'Sync ($pending waiting)' : 'Sync',
-                icon: busy
-                    ? const SizedBox(
-                        width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                    : Badge(
-                        isLabelVisible: pending > 0,
-                        label: Text(pending > 99 ? '99+' : '$pending'),
-                        backgroundColor: AppColors.accent,
-                        textColor: Colors.white,
-                        child: const Icon(Icons.sync_rounded),
-                      ),
+                tooltip: busy
+                    ? 'Syncing…'
+                    : pending > 0
+                        ? 'Sync ($pending waiting)'
+                        : 'Sync',
+                icon: Badge(
+                  isLabelVisible: pending > 0 && !busy,
+                  label: Text(pending > 99 ? '99+' : '$pending'),
+                  backgroundColor: AppColors.accent,
+                  textColor: Colors.white,
+                  child: _SyncIcon(spinning: busy),
+                ),
                 onPressed: () => showSyncSheet(context),
               );
             },
@@ -197,6 +214,50 @@ class _TopBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The sync arrows; they turn while a sync is running.
+class _SyncIcon extends StatefulWidget {
+  final bool spinning;
+  const _SyncIcon({required this.spinning});
+
+  @override
+  State<_SyncIcon> createState() => _SyncIconState();
+}
+
+class _SyncIconState extends State<_SyncIcon> with SingleTickerProviderStateMixin {
+  late final _turn = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.spinning) _turn.repeat();
+  }
+
+  @override
+  void didUpdateWidget(_SyncIcon old) {
+    super.didUpdateWidget(old);
+    if (widget.spinning && !_turn.isAnimating) {
+      _turn.repeat();
+    } else if (!widget.spinning && _turn.isAnimating) {
+      // Finish the current turn so the arrows don't stop at an odd angle.
+      _turn.forward().then((_) => _turn.reset());
+    }
+  }
+
+  @override
+  void dispose() {
+    _turn.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RotationTransition(
+      turns: Tween(begin: 0.0, end: -1.0).animate(_turn),
+      child: Icon(Icons.sync_rounded, color: widget.spinning ? AppColors.accent : null),
     );
   }
 }

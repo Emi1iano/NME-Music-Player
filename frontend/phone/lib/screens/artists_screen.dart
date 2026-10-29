@@ -83,7 +83,7 @@ class _ArtistTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      leading: Artwork(imagePath: _artistImage(artist), size: 60, radius: 30),
+      leading: Artwork(imagePath: _artistImage(artist), size: 60, radius: 30, name: artist.name),
       title: Text(artist.name,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,

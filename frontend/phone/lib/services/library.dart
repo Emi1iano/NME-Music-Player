@@ -65,6 +65,10 @@ class Library extends ChangeNotifier {
   final _artistNames = <String, String>{};        // artistId -> display name
 
   SortMode _sortMode = SortMode.title;
+  // Songs that arrived from another device and haven't been played yet
+  // (they get a "NEW" tag). Saved, so the tag survives restarting the app.
+  Set<String> _newIds = {};
+  static const _newPrefsKey = 'new_from_sync';
   bool scanning = true;           // true while the folder is being read (shows a spinner)
   bool _scanInProgress = false;   // stops two scans from running at the same time
 
@@ -115,6 +119,7 @@ class Library extends ChangeNotifier {
     await _checkWritable();
     // Songs the other device sends, renames or deletes during a sync.
     Backend.instance.onFilesChanged = scan;
+    Backend.instance.onSongReceived = markNew;
 
     _artDir = Directory(p.join((await getApplicationCacheDirectory()).path, 'art'));
     await _artDir.create(recursive: true);
@@ -123,6 +128,7 @@ class Library extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getInt('sortMode') ?? 0;
     _sortMode = SortMode.values[saved.clamp(0, SortMode.values.length - 1)];
+    _newIds = prefs.getStringList(_newPrefsKey)?.toSet() ?? {};
   }
 
   /// Older versions kept songs in `baseDir/music` (and 1.2 in
@@ -214,6 +220,7 @@ class Library extends ChangeNotifier {
     if (backend.available && !backend.isSyncing &&
         backend.added.contains(track.id) && await backend.delete(track.id)) {
       AppLog.instance.info('Deleted "${track.id}" (backend will tell the other device)');
+      clearNew(track.id);
       await scan();
       return true;
     }
@@ -225,8 +232,30 @@ class Library extends ChangeNotifier {
       return false;
     }
     AppLog.instance.info('Deleted "${track.id}" on this phone only');
+    clearNew(track.id);
     await scan();
     return true;
+  }
+
+  /// True for a song that arrived by sync and hasn't been played yet.
+  bool isNew(String trackId) => _newIds.contains(trackId);
+
+  /// A song arrived from the other device. Its id is its path inside the
+  /// Music folder; received songs are saved at the top of it, so that's the
+  /// file name.
+  void markNew(String trackId) {
+    if (_newIds.add(trackId)) _saveNew();
+  }
+
+  /// The song was played (or deleted): drop its "NEW" tag.
+  void clearNew(String trackId) {
+    if (_newIds.remove(trackId)) _saveNew();
+  }
+
+  void _saveNew() {
+    notifyListeners();
+    SharedPreferences.getInstance()
+        .then((prefs) => prefs.setStringList(_newPrefsKey, _newIds.toList()));
   }
 
   /// Changes the Songs tab order and remembers the choice for next time.
@@ -431,12 +460,14 @@ class _ScannedFile {
       problems.add('Could not read tags of "${p.relative(file.path, from: musicPath)}": $e');
     }
 
+    // No tags: many downloads are named "Artist - Title.mp3", so use that.
+    final guess = guessFromFileName(p.basenameWithoutExtension(file.path));
     results.add(_ScannedFile(
       path: file.path,
       // Forward slashes on every platform so ids match across devices.
       relativePath: p.posix.joinAll(p.split(p.relative(file.path, from: musicPath))),
-      title: _orElse(title, p.basenameWithoutExtension(file.path)),
-      artist: _orElse(artist, 'Unknown Artist'),
+      title: _orElse(title, guess.title),
+      artist: _orElse(artist, guess.artist ?? 'Unknown Artist'),
       album: _orElse(album, 'Unknown Album'),
       albumArtist: (albumArtist == null || albumArtist.trim().isEmpty)
           ? null
@@ -450,6 +481,32 @@ class _ScannedFile {
     ));
   }
   return (files: results, problems: problems);
+}
+
+/// Artist and title from a file name, for songs without tags:
+///   "Ellie Goulding - Burn"                     -> Ellie Goulding / Burn
+///   "03 - Daft Punk - Get Lucky (Official Video)" -> Daft Punk / Get Lucky
+///   "Cry for you"                               -> (no artist) / Cry for you
+/// Leading track numbers and "(Official Video)" / "[Lyrics]"-style extras are
+/// dropped; underscores count as spaces.
+({String? artist, String title}) guessFromFileName(String name) {
+  var base = name.replaceAll('_', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+  // "01 - ", "01. ", "1) " at the start: a track number, not part of the name.
+  base = base.replaceFirst(RegExp(r'^\d{1,3}\s*[-.)]\s+'), '');
+  // Extras like "(Official Video)", "[Lyrics]", "(Audio)", "(HQ)".
+  base = base
+      .replaceAll(
+          RegExp(r'\s*[\(\[][^\)\]]*\b(official|video|audio|lyrics?|visuali[sz]er|hq|hd|4k)\b[^\)\]]*[\)\]]',
+              caseSensitive: false),
+          '')
+      .trim();
+  // "Artist - Title" (also with an en/em dash).
+  final parts = base.split(RegExp(r'\s+[-–—]\s+'));
+  if (parts.length >= 2 && parts.first.trim().isNotEmpty) {
+    final title = parts.sublist(1).join(' - ').trim();
+    if (title.isNotEmpty) return (artist: parts.first.trim(), title: title);
+  }
+  return (artist: null, title: base.isEmpty ? name : base);
 }
 
 // Returns [value], or [fallback] if the tag was missing or blank.

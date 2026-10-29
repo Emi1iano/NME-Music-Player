@@ -3,6 +3,8 @@ import 'package:phone/data/mock_data.dart';
 import 'package:phone/models/playback_stats.dart';
 import 'package:phone/models/playlist.dart';
 import 'package:phone/models/track.dart';
+import 'package:phone/services/library.dart';
+import 'package:phone/widgets/artwork.dart';
 import 'package:phone/widgets/common.dart';
 
 void main() {
@@ -63,5 +65,30 @@ void main() {
     expect(formatAgo(now.subtract(const Duration(hours: 3)), now: now), '3 hr ago');
     expect(formatAgo(now.subtract(const Duration(hours: 30)), now: now), 'yesterday');
     expect(formatAgo(now.subtract(const Duration(days: 4)), now: now), '4 days ago');
+  });
+
+  test('artist and title from a file name', () {
+    var g = guessFromFileName('Ellie Goulding - Burn');
+    expect((g.artist, g.title), ('Ellie Goulding', 'Burn'));
+    g = guessFromFileName('03 - Daft Punk - Get Lucky (Official Video)');
+    expect((g.artist, g.title), ('Daft Punk', 'Get Lucky'));
+    g = guessFromFileName('Cry for you');
+    expect((g.artist, g.title), (null, 'Cry for you'));
+    g = guessFromFileName('The_Weeknd_-_Blinding_Lights [Lyrics]');
+    expect((g.artist, g.title), ('The Weeknd', 'Blinding Lights'));
+    // Brackets that aren't extras stay.
+    g = guessFromFileName('Artist - Song (Remix)');
+    expect((g.artist, g.title), ('Artist', 'Song (Remix)'));
+  });
+
+  test('placeholder art letter and colors', () {
+    expect(placeholderLetter('the weeknd'), 'T');
+    expect(placeholderLetter('  (Remix) song'), 'R');
+    expect(placeholderLetter('99 Problems'), '9');
+    expect(placeholderLetter('***'), isNull);
+    expect(placeholderLetter(null), isNull);
+    // Same name, same colors, every time.
+    expect(placeholderColors('Burn'), placeholderColors('Burn'));
+    expect(placeholderColors('Burn'), isNot(placeholderColors('Cry for you')));
   });
 }

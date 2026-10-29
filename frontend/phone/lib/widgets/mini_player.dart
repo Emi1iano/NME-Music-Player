@@ -26,10 +26,28 @@ class MiniPlayer extends StatelessWidget {
           color: AppColors.surfaceHigh,
           child: InkWell(
             onTap: () => openNowPlaying(context),
-            child: Padding(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              // Thin bar along the top: how far into the song we are.
+              StreamBuilder<Duration>(
+                stream: player.audio.positionStream,
+                builder: (context, snap) {
+                  final total = player.audio.duration ?? Duration.zero;
+                  final pos = snap.data ?? Duration.zero;
+                  final value = total.inMilliseconds > 0
+                      ? (pos.inMilliseconds / total.inMilliseconds).clamp(0.0, 1.0)
+                      : 0.0;
+                  return LinearProgressIndicator(
+                    value: value,
+                    minHeight: 2,
+                    backgroundColor: Colors.transparent,
+                    color: AppColors.accent,
+                  );
+                },
+              ),
+              Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
               child: Row(children: [
-                Artwork(imagePath: track.artworkPath, size: 40, radius: 4),
+                Artwork(imagePath: track.artworkPath, size: 40, radius: 4, name: track.title),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -61,7 +79,8 @@ class MiniPlayer extends StatelessWidget {
                   icon: const Icon(Icons.skip_next_rounded),
                 ),
               ]),
-            ),
+              ),
+            ]),
           ),
         );
       },

@@ -34,7 +34,13 @@ class NowPlayingScreen extends StatelessWidget {
     final player = Player.instance;
     return Scaffold(
       body: SafeArea(
-        child: StreamBuilder<Track?>(
+        // Swipe down (quickly) anywhere to close, like the ✕ button.
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onVerticalDragEnd: (details) {
+            if ((details.primaryVelocity ?? 0) > 700) Navigator.pop(context);
+          },
+          child: StreamBuilder<Track?>(
           stream: player.currentTrackStream,
           initialData: player.currentTrack,
           builder: (context, snapshot) {
@@ -55,7 +61,7 @@ class NowPlayingScreen extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  Artwork(imagePath: track?.artworkPath, size: artSize, radius: 12),
+                  Artwork(imagePath: track?.artworkPath, size: artSize, radius: 12, name: track?.title),
                   const Spacer(),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -75,6 +81,7 @@ class NowPlayingScreen extends StatelessWidget {
               );
             });
           },
+          ),
         ),
       ),
     );
@@ -437,7 +444,7 @@ class _BottomRow extends StatelessWidget {
                 final track = player.queue[index];
                 final isCurrent = index == current;
                 return ListTile(
-                  leading: Artwork(imagePath: track.artworkPath, size: 40, radius: 4),
+                  leading: Artwork(imagePath: track.artworkPath, size: 40, radius: 4, name: track.title),
                   title: Text(track.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,

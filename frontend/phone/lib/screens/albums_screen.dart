@@ -119,7 +119,7 @@ class _AlbumCard extends StatelessWidget {
         builder: (context, constraints) => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Artwork(imagePath: album.artworkUrl, size: constraints.maxWidth, radius: 10),
+            Artwork(imagePath: album.artworkUrl, size: constraints.maxWidth, radius: 10, name: album.title),
             const SizedBox(height: 8),
             Text(album.title,
                 maxLines: 1,
