@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -32,12 +33,15 @@ Future<void> main() async {
     return true; // handled: don't crash the app
   };
 
-  // Background playback + lock screen / notification controls.
-  await JustAudioBackground.init(
-    androidNotificationChannelId: 'com.example.phone.audio',
-    androidNotificationChannelName: 'Music playback',
-    androidNotificationOngoing: true,
-  );
+  // Background playback + lock screen / notification controls (phones only;
+  // on Windows the app plays like any desktop app).
+  if (Platform.isAndroid || Platform.isIOS) {
+    await JustAudioBackground.init(
+      androidNotificationChannelId: 'com.example.phone.audio',
+      androidNotificationChannelName: 'Music playback',
+      androidNotificationOngoing: true,
+    );
+  }
 
   // Load everything saved on the phone before showing the first screen.
   // Stats first, because the player writes into it as soon as music plays.

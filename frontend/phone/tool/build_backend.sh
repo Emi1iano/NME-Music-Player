@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Builds the Zig backend (Emiliano's client in this repo) into the Android
-# libraries this app loads: android/app/src/main/jniLibs/<abi>/libbackend.so
+# Builds the Zig backend (Emiliano's client in this repo) into the libraries
+# this app loads: android/app/src/main/jniLibs/<abi>/libbackend.so (phones)
+# and windows/backend/backend.dll (the Windows app).
 #
 # By default it compiles backend/ (his current client, client.zig + api.zig).
 # BACKEND_SRC=<folder> builds another copy instead.
@@ -63,6 +64,15 @@ EOF
   rm -f "$OUT"/*.o "$OUT"/*.pdb
   echo "  $ABI: $(wc -c < "$OUT/libbackend.so") bytes"
 done
+
+# Windows app: backend.dll next to the .exe (windows/CMakeLists.txt copies it).
+WIN_OUT="$APP_DIR/windows/backend"
+mkdir -p "$WIN_OUT"
+WIN_OUT_M="$WIN_OUT"
+command -v cygpath >/dev/null && WIN_OUT_M="$(cygpath -m "$WIN_OUT")"
+(cd "$SRC" && "$ZIG" build-lib api.zig -dynamic -OReleaseFast     -target x86_64-windows-gnu --name backend     --cache-dir "$TMP/zig-cache" -femit-bin="$WIN_OUT_M/backend.dll")
+rm -f "$WIN_OUT"/*.lib "$WIN_OUT"/*.pdb
+echo "  windows x64: $(wc -c < "$WIN_OUT/backend.dll") bytes"
 
 sed -i "s#^\*\*Built from:\*\*.*#**Built from:** \`$REL\` in this branch (last source change \`$COMMIT\`) on $(date +%Y-%m-%d) with Zig $("$ZIG" version),#" \
   "$APP_DIR/android/app/src/main/jniLibs/README.md"

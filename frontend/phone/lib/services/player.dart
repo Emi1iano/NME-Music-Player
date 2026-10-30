@@ -40,8 +40,13 @@ class Player {
   Future<void> init() async {
     // Tell the phone we're a music app (pauses for calls, ducks for
     // navigation voice, etc.).
-    final session = await AudioSession.instance;
-    await session.configure(const AudioSessionConfiguration.music());
+    // (Phones only: Windows has no audio session to configure.)
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+    } catch (e) {
+      AppLog.instance.info('No audio session on this platform ($e)');
+    }
 
     // A new track (or the same one looping) starts a new listen.
     audio.currentIndexStream.listen((_) => _startNewListen());

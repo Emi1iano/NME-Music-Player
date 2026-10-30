@@ -21,6 +21,10 @@ String howToAddMusic() {
     return 'Open the Files app → On My iPhone → NME Music → music, and put your '
         'songs there. You can also drag files in from a computer with Finder or iTunes.';
   }
+  if (Platform.isWindows) {
+    return 'Use Import songs, or copy songs into the Music folder above '
+        '(tap the copy button and paste it into File Explorer).';
+  }
   // Show the folder the way it looks from a PC, e.g. Android/data/<id>/files/music
   final path = Library.instance.musicDir.path;
   final i = path.indexOf('Android/data');

@@ -47,7 +47,9 @@ class Backend extends ChangeNotifier {
   Backend._();
   static final Backend instance = Backend._();
 
-  static const _libName = 'libbackend.so';
+  // Emiliano's library: libbackend.so in the APK, backend.dll next to the
+  // Windows .exe (both built from backend/api.zig).
+  static String get _libName => Platform.isWindows ? 'backend.dll' : 'libbackend.so';
   // v2: the backend before 2026-10 didn't really record `add`, so start over.
   static const _addedPrefsKey = 'backend_added_paths_v2';
   static const _lastSyncPrefsKey = 'backend_last_synced_at';
@@ -73,7 +75,9 @@ class Backend extends ChangeNotifier {
   static const chatMode = false;
 
   /// Where the backend keeps songs, for a given data folder.
-  static String musicFolderIn(String baseDir) => p.join(baseDir, appFolder, 'music');
+  // (Split "testing/app" so Windows gets backslashes throughout.)
+  static String musicFolderIn(String baseDir) =>
+      p.joinAll([baseDir, ...appFolder.split('/'), 'music']);
 
   String get musicPath => musicFolderIn(baseDir);
 
@@ -106,9 +110,9 @@ class Backend extends ChangeNotifier {
     final last = prefs.getInt(_lastSyncPrefsKey);
     if (last != null) lastSyncedAt = DateTime.fromMillisecondsSinceEpoch(last);
 
-    if (!Platform.isAndroid) {
-      // Only Android libraries are built so far.
-      unavailableReason = 'The backend library is only built for Android so far.';
+    if (!Platform.isAndroid && !Platform.isWindows) {
+      // Only Android and Windows libraries are built so far.
+      unavailableReason = 'The backend library is only built for Android and Windows so far.';
       AppLog.instance.info('Backend: not available on ${Platform.operatingSystem}');
       notifyListeners();
       return;
@@ -126,8 +130,13 @@ class Backend extends ChangeNotifier {
     // The backend uses paths relative to the current folder, and an app's
     // current folder starts as "/" (not writable). Point it at our data folder.
     Directory.current = baseDir;
-    _captureStderr();
-    _blockStdin();
+    if (Platform.isWindows) {
+      _captureStderrWindows();
+      // No stdin pipe needed: only the backend's chat mode reads stdin.
+    } else {
+      _captureStderr();
+      _blockStdin();
+    }
     AppLog.instance.info('Backend: loaded $_libName, working folder $baseDir');
 
     // Keep the phone's existing key when moving from the old backend layout.
@@ -558,7 +567,7 @@ class Backend extends ChangeNotifier {
     notifyListeners();
     AppLog.instance.info('Backend: cancelling sync');
 
-    final backendPort = _findBackendPort();
+    final backendPort = Platform.isWindows ? _anyBackendPort : _findBackendPort();
     if (backendPort == null) {
       // The sync is still running: say so instead of pretending it stopped.
       AppLog.instance.warning('Backend: could not find the sync socket to stop it');
@@ -577,7 +586,16 @@ class Backend extends ChangeNotifier {
 
     // Stop its listener; repeat every half second until sync returns (UDP
     // messages can get lost), for up to 15 seconds.
-    void stop() => socket.send([_codeTerminate], backend, backendPort);
+    void stop() {
+      if (backendPort == _anyBackendPort) {
+        // Windows: every port the backend may have picked (32145 and up).
+        for (var port = _firstBackendPort; port < _firstBackendPort + 100; port++) {
+          socket.send([_codeTerminate], backend, port);
+        }
+      } else {
+        socket.send([_codeTerminate], backend, backendPort);
+      }
+    }
     stop();
     _cancelTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
       _readSyncOutput();
@@ -599,6 +617,11 @@ class Backend extends ChangeNotifier {
     _cancelSocket?.close();
     _cancelSocket = null;
   }
+
+  // The backend's sync socket uses port 32145, or the next free one.
+  static const _firstBackendPort = 32145;
+  // Stand-in for "not sure which port": cancelSync then tries all of them.
+  static const _anyBackendPort = -1;
 
   /// The UDP port the backend's sync is using. It starts at 32145 and counts
   /// up if that's taken. Apps can't read /proc/net/udp on Android 10+, and
@@ -785,6 +808,39 @@ class Backend extends ChangeNotifier {
       try {
         final fd = creat(path, 420); // 420 = 0644 permissions; starts empty
         if (fd < 0 || dup2(fd, 2) < 0) {
+          AppLog.instance.warning('Backend: could not capture its messages');
+        }
+      } finally {
+        malloc.free(path);
+      }
+      _stderrRead = 0;
+    } catch (e) {
+      AppLog.instance.warning('Backend: could not capture its messages', e);
+    }
+  }
+
+  /// Windows version of [_captureStderr]: a desktop app has no console, so
+  /// point the process's stderr (STD_ERROR_HANDLE) at the same file with
+  /// CreateFileW + SetStdHandle. Shared read access lets the app read the
+  /// file while the backend writes to it.
+  void _captureStderrWindows() {
+    try {
+      final kernel32 = DynamicLibrary.open('kernel32.dll');
+      final createFile = kernel32.lookupFunction<
+          IntPtr Function(Pointer<Utf16>, Uint32, Uint32, Pointer<Void>, Uint32, Uint32, IntPtr),
+          int Function(Pointer<Utf16>, int, int, Pointer<Void>, int, int, int)>('CreateFileW');
+      final setStdHandle = kernel32
+          .lookupFunction<Int32 Function(Uint32, IntPtr), int Function(int, int)>('SetStdHandle');
+      _stderrFile.parent.createSync(recursive: true);
+      final path = _stderrFile.path.toNativeUtf16();
+      try {
+        const genericWrite = 0x40000000;
+        const shareAll = 0x1 | 0x2 | 0x4; // read | write | delete
+        const createAlways = 2; // start empty
+        const normal = 0x80;
+        const stdErrorHandle = -12 & 0xFFFFFFFF; // STD_ERROR_HANDLE = (DWORD)-12
+        final handle = createFile(path, genericWrite, shareAll, nullptr, createAlways, normal, 0);
+        if (handle == -1 || setStdHandle(stdErrorHandle, handle) == 0) {
           AppLog.instance.warning('Backend: could not capture its messages');
         }
       } finally {

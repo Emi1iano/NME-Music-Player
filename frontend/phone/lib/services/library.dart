@@ -112,10 +112,13 @@ class Library extends ChangeNotifier {
     // iOS: <app>/Documents/testing/app/music (visible in the Files app).
     // The songs live in the backend's own music folder, so Emiliano's
     // backend and the app see the same files.
+    // Windows: %APPDATA%\com.example\phone (keeps Documents tidy).
     final base = Platform.isAndroid
         ? (await getExternalStorageDirectory() ??
             await getApplicationDocumentsDirectory())
-        : await getApplicationDocumentsDirectory();
+        : Platform.isWindows
+            ? await getApplicationSupportDirectory()
+            : await getApplicationDocumentsDirectory();
     baseDir = base.path;
     musicDir = Directory(Backend.musicFolderIn(baseDir));
     await musicDir.create(recursive: true);
@@ -139,11 +142,13 @@ class Library extends ChangeNotifier {
   /// `baseDir/app/music`); the backend now keeps them in its own folder.
   /// Move them over so nobody's library disappears after updating.
   Future<void> _moveOldMusicFolders() async {
-    final olds = {
+    // Compared with p.equals so "a/b" and "a\b" count as the same folder
+    // (Windows); the current music folder is never treated as an old one.
+    final olds = [
       p.join(baseDir, 'music'),
       p.join(baseDir, 'app', 'music'),
       p.join(baseDir, 'testing', 'app', 'music'),
-    }..remove(musicDir.path);
+    ].where((path) => !p.equals(path, musicDir.path));
     for (final path in olds) {
       final old = Directory(path);
       if (!await old.exists()) continue;
