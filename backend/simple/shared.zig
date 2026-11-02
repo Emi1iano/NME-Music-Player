@@ -4,6 +4,11 @@ pub const MTU_SIZE = 1200;
 pub const Code = enum(u8) {
     INITIAL,
     RELAY,
+    RELAY_INITITAL,
+    P2P,
+    TEXT,
+    CLIENT_DISCONNECT,
+    RELAY_DISCONNECT,
     _,
     
     pub fn get(byte: u8) Code {
