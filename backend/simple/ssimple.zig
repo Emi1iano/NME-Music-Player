@@ -236,12 +236,12 @@ const Server = struct {
                         if (x.* == null) continue;
                         if (c.*.?.from.eql(&x.*.?.from)) continue;
                         if (!std.mem.eql(u8, &c.*.?.key, &x.*.?.key)) continue;
-                        self.relay.sendMessageUnlocked(self.io, self.socket, c.*.?.from, &c.*.?.key, &(Code.getByte(.CLIENT_DISCONNECT) ++ c.*.?.key));
                         self.relay.sendMessageUnlocked(self.io, self.socket, x.*.?.from, &x.*.?.key, &(Code.getByte(.CLIENT_DISCONNECT) ++ x.*.?.key));
 
                         x.* = null;
                         self.relay.amount -= 1;
                     }
+                    self.relay.sendMessageUnlocked(self.io, self.socket, c.*.?.from, &c.*.?.key, &(Code.getByte(.CLIENT_DISCONNECT) ++ c.*.?.key));
                     c.* = null;
                     self.relay.amount -= 1;
                     std.debug.print("{s} size: {d}\n", .{ self.relay.name, self.relay.amount });

@@ -34,6 +34,7 @@ const Client = struct {
     got_info: std.atomic.Value(bool) = .init(false),
     chat_disconnect: std.atomic.Value(bool) = .init(false),
     state: std.atomic.Value(Mode) = .init(.Punching),
+    start_sending: std.Io.Mutex = .init,
     const Mode = enum(u8) {
         Punching,
         Claiming,
@@ -93,15 +94,16 @@ const Client = struct {
                     self.got_info.store(true, .release);
                 },
                 .P2P => {
-                    std.debug.print("P2P: {s}\n", .{d});
-                    if (!self.fromPeer(message.from)) {
+                    if (!self.fromPeer(message.from)) blk: {
+                        if (d.len < 9) continue;
                         if (std.mem.eql(u8, &self.key, d[0..8])) {
                             if (std.mem.eql(u8, "Local", d[8..])) {
                                 self.o_localIp = message.from;
-                            } else if (std.mem.eql(u8, "Public", d[8..])) {}
+                                break :blk;
+                            }
                         }
+                        continue;
                     }
-                    std.debug.print("fromm peer\n", .{});
                     if (!std.mem.eql(u8, d, "Ack")) {
                         if (self.state.load(.acquire) != .Relay) {
                             self.sendTo(message.from, Code.getByte(.P2P) ++ "Ack");
@@ -229,43 +231,9 @@ const Client = struct {
         return @splat('a');
     }
     fn getLocalIpAndPort(self: *@This()) ![6]u8 {
-        switch (builtin.os.tag) {
-            .windows => return try getLocalIpWindows(self.io, self.client_socket.address.getPort()),
-            else => return @splat(0),
-        }
-    }
-    fn getLocalIpWindows(io: Io, port: u16) ![6]u8 {
         var result: [6]u8 = undefined;
-        std.mem.writeInt(u16, result[4..6], port, .little);
-        var child = try std.process.spawn(io, .{ .argv = &.{"ipconfig"}, .stdout = .pipe });
-
-        var buffer: [1024]u8 = undefined;
-        var wbuffer: [1024 * 2]u8 = undefined;
-        var reader = child.stdout.?.reader(io, &buffer);
-        var input = &reader.interface;
-        var writer = std.Io.Writer.fixed(&wbuffer);
-
-        _ = try input.streamRemaining(&writer);
-        const result1 = std.mem.cut(u8, writer.buffered(), "IPv4");
-        const result2 = std.mem.cut(u8, result1.?.@"1", ": ");
-        const result3 = std.mem.cut(u8, result2.?.@"1", "\n");
-
-        var byte: u8 = 0;
-        var x: usize = 0;
-        for (result3.?.@"0") |c| {
-            switch (c) {
-                '0'...'9' => {
-                    byte = byte * 10 + (c - '0');
-                },
-                else => {
-                    result[x] = byte;
-                    byte = 0;
-                    x += 1;
-                },
-            }
-        }
-
-        _ = try child.wait(io);
+        @memcpy(result[0..4], &(try LocalIp.getLocalIp4()));
+        std.mem.writeInt(u16, result[4..6], self.client_socket.address.getPort(), .little);
         return result;
     }
     fn getClientSocket(io: Io) !net.Socket {
@@ -291,6 +259,127 @@ const Client = struct {
         if (Local_Testing) return try std.Io.net.IpAddress.parse("172.28.41.169", 5252);
         return try std.Io.net.IpAddress.parse("24.243.26.72", 5252);
     }
+    const LocalIp = struct {
+        //! Find this machine's local IPv4 address with no per-OS output parsing.
+        //!
+        //! Trick: connect() a UDP socket to an external address (nothing is sent),
+        //! then getsockname() tells you which local address the OS routing table
+        //! picked for that destination.
+        //!
+        //! Backends:
+        //!   - Linux / Android: raw kernel syscalls via std.os.linux. No libc needed,
+        //!     so `zig build -Dtarget=aarch64-linux-android` works without the NDK.
+        //!   - Windows: ws2_32 (Winsock), declared directly.
+        //!   - macOS / BSD: libc, declared directly (link libc for these targets).
+        const is_bsd = switch (builtin.os.tag) {
+            .macos, .freebsd, .netbsd, .openbsd, .dragonfly => true,
+            else => false,
+        };
+    
+        const AF_INET = 2; // same value on every OS we support
+        const SOCK_DGRAM_GENERIC = 2; // Windows / macOS / BSD (Linux uses std constants)
+    
+        // BSD/macOS sockaddr_in starts with a length byte and a u8 family.
+        const SockAddrIn = if (is_bsd)
+            extern struct { len: u8, family: u8, port: u16, addr: [4]u8, zero: [8]u8 }
+        else
+            extern struct { family: u16, port: u16, addr: [4]u8, zero: [8]u8 };
+    
+        fn makeAddr(ip: [4]u8, port: u16) SockAddrIn {
+            var a = std.mem.zeroes(SockAddrIn);
+            if (is_bsd) {
+                a.len = @sizeOf(SockAddrIn);
+                a.family = AF_INET;
+            } else {
+                a.family = AF_INET;
+            }
+            a.port = std.mem.nativeToBig(u16, port);
+            a.addr = ip;
+            return a;
+        }
+    
+        const linux_impl = struct {
+            fn localIp4(target: [4]u8) ![4]u8 {
+                const linux = std.os.linux;
+    
+                const rc = linux.socket(linux.AF.INET, linux.SOCK.DGRAM | linux.SOCK.CLOEXEC, 0);
+                if (linux.errno(rc) != .SUCCESS) return error.SocketFailed;
+                const fd: i32 = @intCast(rc);
+                defer _ = linux.close(fd);
+    
+                const dest = makeAddr(target, 53);
+                const crc = linux.connect(fd, @ptrCast(&dest), @sizeOf(SockAddrIn));
+                if (linux.errno(crc) != .SUCCESS) return error.NoRoute;
+    
+                var local = std.mem.zeroes(SockAddrIn);
+                var len: linux.socklen_t = @sizeOf(SockAddrIn);
+                const grc = linux.getsockname(fd, @ptrCast(&local), &len);
+                if (linux.errno(grc) != .SUCCESS) return error.GetSockNameFailed;
+    
+                return local.addr;
+            }
+        };
+        const windows_impl = struct {
+            const Socket = usize;
+            const invalid_socket: Socket = std.math.maxInt(usize);
+    
+            extern "ws2_32" fn WSAStartup(version: u16, data: *anyopaque) callconv(.winapi) c_int;
+            extern "ws2_32" fn WSACleanup() callconv(.winapi) c_int;
+            extern "ws2_32" fn socket(af: c_int, ty: c_int, proto: c_int) callconv(.winapi) Socket;
+            extern "ws2_32" fn connect(s: Socket, name: *const SockAddrIn, len: c_int) callconv(.winapi) c_int;
+            extern "ws2_32" fn getsockname(s: Socket, name: *SockAddrIn, len: *c_int) callconv(.winapi) c_int;
+            extern "ws2_32" fn closesocket(s: Socket) callconv(.winapi) c_int;
+    
+            fn localIp4(target: [4]u8) ![4]u8 {
+                var wsa: [512]u8 align(8) = undefined; // WSADATA is < 512 bytes
+                if (WSAStartup(0x0202, &wsa) != 0) return error.WinsockInit;
+                defer _ = WSACleanup();
+    
+                const s = socket(AF_INET, SOCK_DGRAM_GENERIC, 0);
+                if (s == invalid_socket) return error.SocketFailed;
+                defer _ = closesocket(s);
+    
+                const dest = makeAddr(target, 53);
+                if (connect(s, &dest, @sizeOf(SockAddrIn)) != 0) return error.NoRoute;
+    
+                var local = std.mem.zeroes(SockAddrIn);
+                var len: c_int = @sizeOf(SockAddrIn);
+                if (getsockname(s, &local, &len) != 0) return error.GetSockNameFailed;
+    
+                return local.addr;
+            }
+        };
+        const libc_impl = struct {
+            extern "c" fn socket(af: c_int, ty: c_int, proto: c_int) callconv(.c) c_int;
+            extern "c" fn connect(s: c_int, name: *const SockAddrIn, len: u32) callconv(.c) c_int;
+            extern "c" fn getsockname(s: c_int, name: *SockAddrIn, len: *u32) callconv(.c) c_int;
+            extern "c" fn close(s: c_int) callconv(.c) c_int;
+    
+            fn localIp4(target: [4]u8) ![4]u8 {
+                const s = socket(AF_INET, SOCK_DGRAM_GENERIC, 0);
+                if (s < 0) return error.SocketFailed;
+                defer _ = close(s);
+    
+                const dest = makeAddr(target, 53);
+                if (connect(s, &dest, @sizeOf(SockAddrIn)) != 0) return error.NoRoute;
+    
+                var local = std.mem.zeroes(SockAddrIn);
+                var len: u32 = @sizeOf(SockAddrIn);
+                if (getsockname(s, &local, &len) != 0) return error.GetSockNameFailed;
+    
+                return local.addr;
+            }
+        };
+        const impl = switch (builtin.os.tag) {
+            .linux => linux_impl, // includes Android (abi = .android)
+            .windows => windows_impl,
+            else => libc_impl,
+        };
+        pub fn getLocalIp4() ![4]u8 {
+            return impl.localIp4(.{ 8, 8, 8, 8 });
+        }
+    };
+
 };
 fn cin(io: Io, buffer: []u8) []u8 {
     var rbuffer: [256]u8 = undefined;
