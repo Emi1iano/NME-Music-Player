@@ -94,8 +94,14 @@ const Client = struct {
                 },
                 .P2P => {
                     std.debug.print("P2P: {s}\n", .{d});
-                    if (d.len < 8) continue;
-                    if (!self.fromPeer(message.from, d[0..8])) continue;
+                    if (!self.fromPeer(message.from)) {
+                        if (std.mem.eql(u8, &self.key, d[0..8])) {
+                            if (std.mem.eql(u8, "Local", d[8..])) {
+                                self.o_localIp = message.from;
+                            } else if (std.mem.eql(u8, "Public", d[8..])) {}
+                        }
+                    }
+                    std.debug.print("fromm peer\n", .{});
                     if (!std.mem.eql(u8, d, "Ack")) {
                         if (self.state.load(.acquire) != .Relay) {
                             self.sendTo(message.from, Code.getByte(.P2P) ++ "Ack");
@@ -108,7 +114,7 @@ const Client = struct {
                     }
                 },
                 .TEXT => {
-                    if (!message.from.eql(&self.serverIp) and !self.fromPeer(message.from, &.{})) continue;
+                    if (!message.from.eql(&self.serverIp) and !self.fromPeer(message.from)) continue;
                     std.debug.print("{s}\n", .{d});
                 },
                 .CLIENT_DISCONNECT => {
@@ -132,12 +138,10 @@ const Client = struct {
             std.debug.print("Error sending data: {any}\n", .{err});
         };
     }
-    fn fromPeer(self: *@This(), from: net.IpAddress, key: []u8) bool {
+    fn fromPeer(self: *@This(), from: net.IpAddress) bool {
         if (!self.got_info.load(.acquire)) return false;
         if (from.eql(&self.o_publicIp)) return true;
-        if (self.o_localIp) |l| return from.eql(&l) else {
-            if (std.mem.eql(u8, &self.key, key)) self.o_localIp = from;
-        }
+        if (self.o_localIp) |l| return from.eql(&l);
         return false;
     }
     fn resolveIp(self: *@This()) !void {
