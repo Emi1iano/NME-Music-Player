@@ -89,10 +89,13 @@ const Client = struct {
                     std.debug.print("Other client public ip: {d}.{d}.{d}.{d}:{d}\n", .{ d[0], d[1], d[2], d[3], std.mem.readInt(u16, d[4..6], .little) });
                     self.o_publicIp = .{ .ip4 = .{ .bytes = d[0..4].*, .port = std.mem.readInt(u16, d[4..6], .little) } };
                     self.o_localIp = if (@as(u32, @bitCast(d[6..10].*)) == 0) null else .{ .ip4 = .{ .bytes = d[6..10].*, .port = std.mem.readInt(u16, d[10..12], .little) } };
+                    if (self.o_localIp != null) std.debug.print("Other Client local ip: {any}\n", .{self.o_localIp.?});
                     self.got_info.store(true, .release);
                 },
                 .P2P => {
-                    if (!self.fromPeer(message.from)) continue;
+                    std.debug.print("P2P: {s}\n", .{d});
+                    if (d.len < 8) continue;
+                    if (!self.fromPeer(message.from, d[0..8])) continue;
                     if (!std.mem.eql(u8, d, "Ack")) {
                         if (self.state.load(.acquire) != .Relay) {
                             self.sendTo(message.from, Code.getByte(.P2P) ++ "Ack");
@@ -105,7 +108,7 @@ const Client = struct {
                     }
                 },
                 .TEXT => {
-                    if (!message.from.eql(&self.serverIp) and !self.fromPeer(message.from)) continue;
+                    if (!message.from.eql(&self.serverIp) and !self.fromPeer(message.from, &.{})) continue;
                     std.debug.print("{s}\n", .{d});
                 },
                 .CLIENT_DISCONNECT => {
@@ -129,10 +132,12 @@ const Client = struct {
             std.debug.print("Error sending data: {any}\n", .{err});
         };
     }
-    fn fromPeer(self: *@This(), from: net.IpAddress) bool {
+    fn fromPeer(self: *@This(), from: net.IpAddress, key: []u8) bool {
         if (!self.got_info.load(.acquire)) return false;
         if (from.eql(&self.o_publicIp)) return true;
-        if (self.o_localIp) |l| return from.eql(&l);
+        if (self.o_localIp) |l| return from.eql(&l) else {
+            if (std.mem.eql(u8, &self.key, key)) self.o_localIp = from;
+        }
         return false;
     }
     fn resolveIp(self: *@This()) !void {
@@ -142,9 +147,9 @@ const Client = struct {
             if (self.state.load(.acquire) != .Punching) break;
             if (Testing_Relay_Mode) break;
             if (self.o_localIp) |ip| {
-                self.sendTo(ip, Code.getByte(.P2P) ++ "Local");
+                self.sendTo(ip, Code.getByte(.P2P) ++ self.key ++ "Local");
             }
-            self.sendTo(self.o_publicIp, Code.getByte(.P2P) ++ "Public");
+            self.sendTo(self.o_publicIp, Code.getByte(.P2P) ++ self.key ++ "Public");
             try self.io.sleep(.fromMilliseconds(100), .awake);
         }
         if (self.state.cmpxchgStrong(.Punching, .Relay, .acq_rel, .acquire) != null) {
