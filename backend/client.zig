@@ -10,7 +10,6 @@ const Io = std.Io;
 //TODO make transfering songs faster
 //TODO making sure the music tables are always the same on both devices
 //TODO maybe add some semi auto updating feature
-//TODO maybe update zig to 0.17
 const TESTING_RELAY: bool = false;
 const TESTING: bool = true;
 const CHAT_MODE: bool = false;
@@ -692,19 +691,18 @@ const NewFileManager = struct {
     //         musicpaths,
     //         chnages,
     //     };
-    //     fn init(io: Io, alloc: std.mem.Allocator) @This() {
-    //         return .{
-    //             .table = try MusicTable.init(io, alloc),
-    //             .paths = try MusicPaths.init(io, alloc),
-    //             .changes = try Changes.init(io, alloc),
-    //         };
+    //     fn init(self: *@This(), io: Io, alloc: std.mem.Allocator) !void {
+    //        self.table = try MusicTable.init(io, alloc);
+    //        self.table.?.file.parse(io);
+    //        self.paths = try MusicPaths.init(io, alloc);
+    //        self.paths.?.file.parse(io);
+    //        self.changes = try Changes.init(io, alloc);
+    //        self.changes.?.file.parse(io);
     //     }
     //     fn deinit(self: *@This(), io: Io) void {
     //         self.table.deinit(io);
     //         self.paths.deinit(io);
     //         self.changes.deinit(io);
-    //     }
-    //     fn parseAll(self: *@This(), io: Io, alloc: std.mem.Allocator) !void {
     //     }
     // };
     const Commands = struct {
@@ -933,7 +931,7 @@ const NewFileManager = struct {
 
             const file = switch (Io.Dir.path.isAbsolute(old)) {
                 true => try Io.Dir.openFileAbsolute(io, old, .{}),
-                false => try music_dir.openFile(io, new, .{}),
+                false => try music_dir.openFile(io, old, .{}),
             };
             defer file.close(io);
             var old_absolute_path_buf: [256]u8 = undefined;
@@ -1449,14 +1447,14 @@ fn testPrint(comptime fmt: []const u8, args: anytype) void {
     if (!TESTING) return;
     std.debug.print(fmt, args);
 }
-fn cin(io: std.Io, buffer: []u8) []u8 {
-    var rBuffer: [256]u8 = undefined;
-    var stdin = std.Io.File.stdin().reader(io, &rBuffer);
+fn cin(io: std.io, buffer: []u8) []u8 {
+    var rbuffer: [256]u8 = undefined;
+    var stdin = std.Io.file.stdin().reader(io, &rbuffer);
     var input = &stdin.interface;
 
-    var writer = std.Io.Writer.fixed(buffer);
+    var writer = std.Io.writer.fixed(buffer);
 
-    const len = input.streamDelimiter(&writer, '\n') catch 1;
+    const len = input.streamdelimiter(&writer, '\n') catch 1;
 
     if (builtin.os.tag == .windows) {
         return buffer[0 .. len - 1];
