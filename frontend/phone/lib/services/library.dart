@@ -235,7 +235,7 @@ class Library extends ChangeNotifier {
       AppLog.instance.error('Could not delete "${track.id}"', e, st);
       return false;
     }
-    AppLog.instance.info('Deleted "${track.id}" on this phone only');
+    AppLog.instance.info('Deleted "${track.id}" on this device only');
     clearNew(track.id);
     await scan();
     return true;
