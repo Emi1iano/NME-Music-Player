@@ -182,10 +182,17 @@ class Backend extends ChangeNotifier {
     final newPath = folder == '.' ? newName : '$folder/$newName';
     final moved = File(p.join(musicPath, newPath)).existsSync() &&
         !File(p.join(musicPath, trackPath)).existsSync();
-    if (code != 0 || !moved) {
+    if (!moved) {
       AppLog.instance.warning('Backend: rename "$trackPath" -> "$newName" did not rename '
           'the file (code $code)');
       return false;
+    }
+    if (code != 0) {
+      // The backend renamed the file and recorded the change, then failed
+      // updating its folder list (it re-opens the old name). The rename
+      // itself happened, so carry on.
+      AppLog.instance.warning('Backend: rename "$trackPath" -> "$newName" done, but the '
+          'backend reported an error afterwards (code $code)');
     }
     if (added.remove(trackPath)) {
       added.add(newPath);
