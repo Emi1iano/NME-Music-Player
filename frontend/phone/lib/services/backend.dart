@@ -446,6 +446,10 @@ class Backend extends ChangeNotifier {
           if (name.isNotEmpty) {
             receivedSongs.add(name);
             onSongReceived?.call(name);
+            // Don't `add` it to the backend after the rescan: that would
+            // queue it as a new song and send it straight back to the
+            // device it came from at the next sync.
+            if (added.add(name)) _saveAdded();
           }
         }
         _filesChanged();

@@ -128,7 +128,10 @@ class _SyncSheetState extends State<_SyncSheet> {
             final key = backend.key;
             final busy = backend.isSyncing;
             final cancelling = backend.syncState == SyncState.cancelling;
-            return Column(
+            // Scrolls when the panel is taller than the screen or window
+            // (e.g. after a sync lists the songs that arrived).
+            return SingleChildScrollView(
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -304,6 +307,7 @@ class _SyncSheetState extends State<_SyncSheet> {
                   style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
                 ),
               ],
+            ),
             );
           },
         ),
