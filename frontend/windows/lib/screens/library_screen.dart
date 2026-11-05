@@ -88,7 +88,7 @@ class LibraryScreen extends StatelessWidget {
                   )
                 : ListView.separated(
               itemCount: s.library.length,
-              separatorBuilder: (_, __) => Divider(height: 1, color: Colors.white.withOpacity(.12)),
+              separatorBuilder: (_, __) => Divider(height: 1, color: c.pal.divider),
               itemBuilder: (_, i) {
                 final song = s.library[i];
                 final on = s.playing == song;
@@ -97,8 +97,9 @@ class LibraryScreen extends StatelessWidget {
                   title: Text(song.title, style: TextStyle(fontWeight: on ? FontWeight.w700 : FontWeight.w400)),
                   subtitle: Text('${s.counts[song.path] ?? 0} plays', style: const TextStyle(fontSize: 12)),
                   leading: CircleAvatar(
-                    backgroundColor: on ? accent : Colors.white.withOpacity(.15),
-                    child: Icon(on && !s.paused ? Icons.graphic_eq : Icons.play_arrow, color: Colors.white),
+                    backgroundColor: on ? c.pal.accent : c.pal.field,
+                    child: Icon(on && !s.paused ? Icons.graphic_eq : Icons.play_arrow,
+                        color: on ? c.pal.onAccent : c.pal.ink),
                   ),
                   trailing: PopupMenuButton<String>(
                     icon: const Icon(Icons.more_vert),

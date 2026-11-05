@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
+import '../screens/appearance_screen.dart';
 import '../screens/library_screen.dart';
 import '../screens/playlists_screen.dart';
 import '../screens/stats_screen.dart';
 import '../screens/sync_settings_screen.dart';
 import '../services/store.dart';
+import '../theme/app_theme.dart';
 import '../widgets/app_sidebar.dart';
 import '../widgets/glass.dart';
 import '../widgets/transport_bar.dart';
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key});
+  final ThemeController theme;
+  const AppShell({super.key, required this.theme});
   @override
   State<AppShell> createState() => _AppShellState();
 }
@@ -22,6 +25,12 @@ class _AppShellState extends State<AppShell> {
   void initState() {
     super.initState();
     store.load();
+  }
+
+  @override
+  void dispose() {
+    store.dispose();
+    super.dispose();
   }
 
   @override
@@ -39,6 +48,7 @@ class _AppShellState extends State<AppShell> {
                   PlaylistsScreen(store),
                   StatsScreen(store),
                   SyncSettingsScreen(store),
+                  AppearanceScreen(widget.theme),
                 ]);
                 final content = Column(children: [
                   Expanded(child: pages),

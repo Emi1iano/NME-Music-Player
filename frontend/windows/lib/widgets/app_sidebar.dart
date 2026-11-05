@@ -8,8 +8,9 @@ const navIcons = [
   Icons.queue_music_rounded,
   Icons.bar_chart_rounded,
   Icons.sync_rounded,
+  Icons.palette_rounded,
 ];
-const navLabels = ['Library', 'Playlists', 'Stats', 'Sync'];
+const navLabels = ['Library', 'Playlists', 'Stats', 'Sync', 'Appearance'];
 
 /// Wide layouts (desktop / web).
 class AppSidebar extends StatelessWidget {
@@ -37,12 +38,16 @@ class AppSidebar extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(16),
-                    color: i == index ? accent : Colors.transparent,
+                    color: i == index ? c.pal.accent : Colors.transparent,
                   ),
                   child: Row(children: [
-                    Icon(navIcons[i], size: 20),
+                    Icon(navIcons[i], size: 20, color: i == index ? c.pal.onAccent : c.pal.ink),
                     const SizedBox(width: 12),
-                    Text(navLabels[i], style: TextStyle(fontWeight: i == index ? FontWeight.w700 : FontWeight.w400)),
+                    Text(navLabels[i],
+                        style: TextStyle(
+                          fontWeight: i == index ? FontWeight.w700 : FontWeight.w400,
+                          color: i == index ? c.pal.onAccent : c.pal.ink,
+                        )),
                   ]),
                 ),
               ),
@@ -77,9 +82,9 @@ class AppDock extends StatelessWidget {
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: i == index ? accent : Colors.white.withOpacity(.12),
+                  color: i == index ? c.pal.accent : c.pal.field,
                 ),
-                child: Icon(navIcons[i], color: Colors.white),
+                child: Icon(navIcons[i], color: i == index ? c.pal.onAccent : c.pal.ink),
               ),
             ),
         ]),

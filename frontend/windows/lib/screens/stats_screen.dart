@@ -43,7 +43,7 @@ class StatsScreen extends StatelessWidget {
                       child: Row(children: [
                         SizedBox(
                           width: 28,
-                          child: Text('${i + 1}', style: const TextStyle(color: accent, fontWeight: FontWeight.w700)),
+                          child: Text('${i + 1}', style: TextStyle(color: c.pal.accent, fontWeight: FontWeight.w700)),
                         ),
                         Expanded(child: Text(s.songByPath(top[i].key).title, overflow: TextOverflow.ellipsis)),
                         Text('${top[i].value} plays'),

@@ -21,10 +21,10 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
     super.dispose();
   }
 
-  InputDecoration _field(String hint) => InputDecoration(
+  InputDecoration _field(BuildContext c, String hint) => InputDecoration(
         hintText: hint,
         filled: true,
-        fillColor: Colors.white.withOpacity(.12),
+        fillColor: c.pal.field,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
       );
 
@@ -53,12 +53,11 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
           controller: ctl,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(8)],
-          decoration: _field('Enter the other device\'s 8-digit key, or leave empty to use yours'),
+          decoration: _field(c, 'Enter the other device\'s 8-digit key, or leave empty to use yours'),
         ),
         const SizedBox(height: 14),
         Wrap(spacing: 10, runSpacing: 10, children: [
           FilledButton.icon(
-            style: FilledButton.styleFrom(backgroundColor: accent, foregroundColor: Colors.white),
             onPressed: s.syncing || !MusicSync.supported ? null : () => s.connect(ctl.text),
             icon: const Icon(Icons.sync),
             label: const Text('Sync'),
@@ -83,10 +82,10 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
           Expanded(child: Text(s.status, style: const TextStyle(fontSize: 12))),
         ]),
         const SizedBox(height: 4),
-        const Text(
+        Text(
           'Press Sync on both devices with the same key within 20 seconds. Each device sends '
           'the songs added since the last sync and receives the ones it is missing.',
-          style: TextStyle(fontSize: 12, color: Colors.white70),
+          style: TextStyle(fontSize: 12, color: c.pal.muted),
         ),
         const Divider(height: 32),
         const Text('Your songs', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -110,12 +109,12 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
           '$waiting song(s) waiting to be sent. Songs are only sent once; use "Send all my songs again" '
           'to give another device the whole library. Songs received from the other device and songs '
           'you import or drop into this folder all appear in your library.',
-          style: const TextStyle(fontSize: 12, color: Colors.white70),
+          style: TextStyle(fontSize: 12, color: c.pal.muted),
         ),
         const SizedBox(height: 14),
-        const Text(
+        Text(
           'The pairing server address is built into the sync backend.',
-          style: TextStyle(fontSize: 11, color: Colors.white70),
+          style: TextStyle(fontSize: 11, color: c.pal.muted),
         ),
       ]),
     );

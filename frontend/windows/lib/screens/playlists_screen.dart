@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../services/store.dart';
-import '../theme/app_theme.dart';
 import '../widgets/glass.dart';
 
 class PlaylistsScreen extends StatefulWidget {
@@ -80,7 +79,6 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
             ChoiceChip(
               label: Text(n),
               selected: n == cur,
-              selectedColor: accent,
               onSelected: (_) => setState(() => sel = n),
             ),
           ActionChip(avatar: const Icon(Icons.add, size: 18), label: const Text('New'), onPressed: _create),
@@ -91,7 +89,6 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
         else ...[
           Row(children: [
             FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: accent, foregroundColor: Colors.white),
               onPressed: tracks.isEmpty ? null : () => s.playPlaylist(cur),
               icon: const Icon(Icons.play_arrow),
               label: const Text('Play'),
