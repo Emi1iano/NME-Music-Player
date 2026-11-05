@@ -46,3 +46,10 @@ frontend/*/windows/x86/
 Thumbs.db
 *.log
 *.swp
+
+# From the backend branch
+backend/testing2/app/
+backend/tree.zig
+backend/simple/testing2/app/
+backend/simple/.zig-cache/
+backend/simple/zig-out/
