@@ -293,7 +293,13 @@ class Backend extends ChangeNotifier {
   // done", so the app closes the connection once everything WE had to send
   // is confirmed received ("Done sending" per song) and nothing has arrived
   // for [_quietBeforeFinish].
-  static const _quietBeforeFinish = Duration(seconds: 10);
+  // The backend prints nothing while a song is ARRIVING (only when it's
+  // complete), so "quiet" can also mean "the other device is still sending
+  // to us". Wait long enough for a song to cross: through the server (relay,
+  // e.g. a phone on mobile data) that can take a minute.
+  Duration get _quietBeforeFinish => syncMode == 'through the server'
+      ? const Duration(seconds: 60)
+      : const Duration(seconds: 25);
   int _songsToSend = 0;              // "add" lines in changes.txt when the sync started
   int _songsConfirmed = 0;           // "Done sending" lines so far
   DateTime _lastActivity = DateTime.now();
