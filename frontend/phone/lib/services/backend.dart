@@ -318,6 +318,8 @@ class Backend extends ChangeNotifier {
       await _writeKey(withKey);
       key = withKey;
     }
+    await _queue; // nothing else may be using the backend while it reloads
+    _reloadBackend();
     syncState = SyncState.connecting;
     syncPeer = null;
     syncMode = null;
@@ -329,7 +331,8 @@ class Backend extends ChangeNotifier {
     finishingIn = null;
     stayConnected = false;
     _finishing = false;
-    _songsToSend = _readChanges().where((l) => l.startsWith('add')).length;
+    _changesAtStart = _readChanges();
+    _songsToSend = _changesAtStart.where((l) => l.startsWith('add')).length;
     _songsConfirmed = 0;
     syncStartedAt = DateTime.now();
     notifyListeners();
@@ -366,6 +369,9 @@ class Backend extends ChangeNotifier {
             (prefs) => prefs.setInt(_lastSyncPrefsKey, lastSyncedAt!.millisecondsSinceEpoch));
         AppLog.instance.info('Backend: sync complete (sent $songsSent, received $songsReceived)');
         Appearance.instance.vibrate();
+        // Everything we queued was confirmed: take it off the backend's queue
+        // (it never clears changes.txt itself, so every sync re-sent every song).
+        if (_songsConfirmed >= _songsToSend) _clearDeliveredChanges();
       }
       _refreshPending();
       if (songsReceived + songsRenamed + songsDeleted > 0) {
@@ -528,6 +534,91 @@ class Backend extends ChangeNotifier {
 
   /// The backend's list of changes the next sync will send (one per line,
   /// e.g. "add id:3", "delete id:1").
+  // changes.txt as it was when the current sync started.
+  List<String> _changesAtStart = const [];
+
+  /// Removes the changes the last sync delivered from the backend's
+  /// changes.txt, keeping any added since (none can be: commands wait while a
+  /// sync runs). Leaves the song table alone, so Rename and Delete keep
+  /// working for these songs; `testreset` would wipe it.
+  void _clearDeliveredChanges() {
+    try {
+      final file = File(p.join(baseDir, appFolder, 'changes.txt'));
+      if (!file.existsSync()) return;
+      final now = _readChanges();
+      final n = _changesAtStart.length;
+      final same = now.length >= n &&
+          List.generate(n, (i) => now[i] == _changesAtStart[i]).every((x) => x);
+      if (!same) {
+        AppLog.instance.warning('Backend: changes.txt changed during the sync; left as is');
+        return;
+      }
+      final rest = now.sublist(n);
+      file.writeAsStringSync(rest.isEmpty ? '' : '${rest.join('\n')}\n');
+      AppLog.instance.info('Backend: cleared $n delivered change(s) from the queue');
+    } catch (e) {
+      AppLog.instance.warning('Backend: could not clear delivered changes', e);
+    }
+  }
+
+  /// Unloads the backend library so the next call loads it fresh.
+  ///
+  /// The backend keeps the number of the last transfer it received in a
+  /// global (Reliable.Rx.last_done in backend/client.zig) and silently drops
+  /// a new transfer with the same number, while still confirming it. Each app
+  /// numbers its transfers from 1 after a restart, so a song from a device
+  /// that restarted since the last sync could vanish. A fresh library starts
+  /// with no "last transfer". Only between commands: never while one runs.
+  void _reloadBackend() {
+    try {
+      if (Platform.isWindows) {
+        final k = DynamicLibrary.open('kernel32.dll');
+        final getModule = k.lookupFunction<IntPtr Function(Pointer<Utf16>),
+            int Function(Pointer<Utf16>)>('GetModuleHandleW');
+        final free =
+            k.lookupFunction<Int32 Function(IntPtr), int Function(int)>('FreeLibrary');
+        final name = _libName.toNativeUtf16();
+        try {
+          // Every load added a reference: release them all.
+          for (var i = 0; i < 10000; i++) {
+            final h = getModule(name);
+            if (h == 0) break;
+            free(h);
+          }
+          AppLog.instance.info('Backend: library reloaded for this sync '
+              '(${getModule(name) == 0 ? 'unloaded' : 'still loaded'})');
+        } finally {
+          malloc.free(name);
+        }
+      } else if (Platform.isAndroid) {
+        final libc = DynamicLibrary.process();
+        final dlopen = libc.lookupFunction<Pointer<Void> Function(Pointer<Utf8>, Int32),
+            Pointer<Void> Function(Pointer<Utf8>, int)>('dlopen');
+        final dlclose = libc.lookupFunction<Int32 Function(Pointer<Void>),
+            int Function(Pointer<Void>)>('dlclose');
+        const rtldNow = 2, rtldNoLoad = 4; // only find it if it's already loaded
+        final name = _libName.toNativeUtf8();
+        try {
+          for (var i = 0; i < 10000; i++) {
+            final h = dlopen(name, rtldNow | rtldNoLoad);
+            if (h == nullptr) break;
+            dlclose(h); // the reference dlopen just added
+            if (dlclose(h) != 0) break; // and one of the older ones
+          }
+          final left = dlopen(name, rtldNow | rtldNoLoad);
+          if (left != nullptr) dlclose(left);
+          AppLog.instance.info('Backend: library reloaded for this sync '
+              '(${left == nullptr ? 'unloaded' : 'still loaded'})');
+        } finally {
+          malloc.free(name);
+        }
+      }
+    } catch (e) {
+      // Worst case: a song from a restarted device is skipped this time.
+      AppLog.instance.warning('Backend: could not reload the backend library', e);
+    }
+  }
+
   List<String> _readChanges() {
     try {
       final file = File(p.join(baseDir, appFolder, 'changes.txt'));
