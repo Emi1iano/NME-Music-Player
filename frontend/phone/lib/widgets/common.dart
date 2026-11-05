@@ -270,7 +270,7 @@ Future<void> renameSongFile(BuildContext context, Track track) async {
   // Keep the song's extension, or the library would stop seeing it as music.
   final finalName =
       p.extension(newName).toLowerCase() == ext.toLowerCase() ? newName : '$newName$ext';
-  if (finalName.contains('/') || finalName.contains(r'')) {
+  if (finalName.contains('/') || finalName.contains(r'\')) {
     messenger.showSnackBar(
         const SnackBar(content: Text('Use a name without slashes')));
     return;
