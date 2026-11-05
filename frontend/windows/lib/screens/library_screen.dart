@@ -16,8 +16,7 @@ class LibraryScreen extends StatelessWidget {
       builder: (d) => AlertDialog(
         title: const Text('Delete song?'),
         content: Text('"${song.title}" will be deleted from your music folder and removed from your '
-            'playlists and stats. Sync won\'t download it again unless you choose it under '
-            '"Get deleted songs back".'),
+            'playlists and stats. It stays on your other device.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
           FilledButton(

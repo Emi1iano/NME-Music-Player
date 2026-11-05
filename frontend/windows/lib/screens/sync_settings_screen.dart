@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../models/models.dart';
 import '../services/store.dart';
+import '../services/sync_api.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass.dart';
 
@@ -14,15 +14,10 @@ class SyncSettingsScreen extends StatefulWidget {
 
 class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
   final ctl = TextEditingController();
-  final folderCtl = TextEditingController();
-  final serverCtl = TextEditingController();
-  final restore = <String>{};
 
   @override
   void dispose() {
     ctl.dispose();
-    folderCtl.dispose();
-    serverCtl.dispose();
     super.dispose();
   }
 
@@ -36,11 +31,7 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
   @override
   Widget build(BuildContext c) {
     final s = widget.s;
-    // The store loads after this screen is built, so fill the fields once it has.
-    if (folderCtl.text.isEmpty && s.folder.isNotEmpty) folderCtl.text = s.folder;
-    if (serverCtl.text.isEmpty) serverCtl.text = s.server;
-    restore.retainAll(s.deleted);
-    final deleted = s.deleted.toList()..sort();
+    final waiting = s.pendingSongs;
 
     return Glass(
       child: ListView(children: [
@@ -68,7 +59,7 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
         Wrap(spacing: 10, runSpacing: 10, children: [
           FilledButton.icon(
             style: FilledButton.styleFrom(backgroundColor: accent, foregroundColor: Colors.white),
-            onPressed: s.syncing ? null : () => s.connect(ctl.text),
+            onPressed: s.syncing || !MusicSync.supported ? null : () => s.connect(ctl.text),
             icon: const Icon(Icons.sync),
             label: const Text('Sync'),
           ),
@@ -91,67 +82,41 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
           ],
           Expanded(child: Text(s.status, style: const TextStyle(fontSize: 12))),
         ]),
+        const SizedBox(height: 4),
         const Text(
-          'Press Sync on both devices with the same key within 2 minutes. '
-          'Each device downloads the songs it is missing.',
+          'Press Sync on both devices with the same key within 20 seconds. Each device sends '
+          'the songs added since the last sync and receives the ones it is missing.',
           style: TextStyle(fontSize: 12, color: Colors.white70),
         ),
         const Divider(height: 32),
-        const Text('Get deleted songs back', style: TextStyle(fontWeight: FontWeight.w600)),
+        const Text('Your songs', style: TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
+        SelectableText(s.folder, style: const TextStyle(fontSize: 12)),
+        const SizedBox(height: 8),
+        Wrap(spacing: 10, runSpacing: 10, children: [
+          OutlinedButton.icon(
+            onPressed: MusicSync.supported ? s.openMusicFolder : null,
+            icon: const Icon(Icons.folder_open, size: 18),
+            label: const Text('Open folder'),
+          ),
+          OutlinedButton.icon(
+            onPressed: s.syncing || s.library.isEmpty ? null : s.sendAllAgain,
+            icon: const Icon(Icons.upload, size: 18),
+            label: const Text('Send all my songs again'),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        Text(
+          '$waiting song(s) waiting to be sent. Songs are only sent once; use "Send all my songs again" '
+          'to give another device the whole library. Songs received from the other device and songs '
+          'you import or drop into this folder all appear in your library.',
+          style: const TextStyle(fontSize: 12, color: Colors.white70),
+        ),
+        const SizedBox(height: 14),
         const Text(
-          'Songs you deleted are skipped when syncing. Pick the ones you want again and resync '
-          'to download them from your other device.',
-          style: TextStyle(fontSize: 12, color: Colors.white70),
+          'The pairing server address is built into the sync backend.',
+          style: TextStyle(fontSize: 11, color: Colors.white70),
         ),
-        const SizedBox(height: 8),
-        if (deleted.isEmpty)
-          const Text('No deleted songs.', style: TextStyle(fontSize: 12))
-        else ...[
-          for (final p in deleted)
-            CheckboxListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              value: restore.contains(p),
-              title: Text(Song.fromPath(p).title),
-              subtitle: Text(p, style: const TextStyle(fontSize: 11)),
-              onChanged: (v) => setState(() => v == true ? restore.add(p) : restore.remove(p)),
-            ),
-          Wrap(spacing: 10, runSpacing: 10, children: [
-            TextButton(
-              onPressed: () => setState(() => restore.length == deleted.length
-                  ? restore.clear()
-                  : restore.addAll(deleted)),
-              child: Text(restore.length == deleted.length ? 'Select none' : 'Select all'),
-            ),
-            FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: accent, foregroundColor: Colors.white),
-              onPressed: s.syncing || restore.isEmpty ? null : () => s.resync({...restore}),
-              icon: const Icon(Icons.restore),
-              label: Text('Resync ${restore.length} song(s)'),
-            ),
-          ]),
-        ],
-        const Divider(height: 32),
-        const Text('Settings', style: TextStyle(fontWeight: FontWeight.w600)),
-        const SizedBox(height: 8),
-        const Text('Music folder', style: TextStyle(fontSize: 12)),
-        const SizedBox(height: 4),
-        TextField(
-          controller: folderCtl,
-          decoration: _field('Folder with your songs'),
-          onSubmitted: s.setFolder,
-        ),
-        const SizedBox(height: 10),
-        const Text('Pairing server (host:port)', style: TextStyle(fontSize: 12)),
-        const SizedBox(height: 4),
-        TextField(
-          controller: serverCtl,
-          decoration: _field('24.243.26.72:5252'),
-          onSubmitted: s.setServer,
-        ),
-        const SizedBox(height: 4),
-        const Text('Press Enter to save.', style: TextStyle(fontSize: 11, color: Colors.white70)),
       ]),
     );
   }

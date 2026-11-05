@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
@@ -8,17 +7,19 @@ import 'audio_api.dart';
 import 'sync_api.dart';
 
 class Store extends ChangeNotifier {
-  static const defaultServer = '24.243.26.72:5252';
-
   final library = <Song>[];
-  final deleted = <String>{}; // songs the user deleted; sync skips them until resync
   final counts = <String, int>{};
   final playlists = <String, List<String>>{};
+
+  // The backend keeps a table of songs and the changes the next sync sends.
+  // These sets tell which songs it already knows (or got from the other
+  // device) and which of them still wait for a sync.
+  final _known = <String>{};
+  final _pending = <String>{};
   int totalSecs = 0;
   String? key;
   String status = 'Not connected';
-  String folder = '';
-  String server = defaultServer;
+  String folder = ''; // the backend's music folder (fixed)
   bool syncing = false;
   bool importing = false;
   Song? playing;
@@ -61,15 +62,18 @@ class Store extends ChangeNotifier {
     if (pl != null) {
       (jsonDecode(pl) as Map).forEach((k, v) => playlists[k] = List<String>.from(v));
     }
-    deleted.addAll(_p!.getStringList('deleted') ?? const []);
+    _known.addAll(_p!.getStringList('known') ?? const []);
+    _pending.addAll(_p!.getStringList('pending') ?? const []);
     totalSecs = _p!.getInt('secs') ?? 0;
-    key = _p!.getString('key') ?? await MusicSync.readKey();
-    folder = _p!.getString('folder') ?? MusicSync.defaultFolder();
-    server = _p!.getString('server') ?? defaultServer;
+    final problem = await MusicSync.init();
+    if (problem != null) status = problem;
+    folder = MusicSync.defaultFolder();
+    key = await MusicSync.readKey() ?? await MusicSync.newKey();
     await rescan();
   }
 
-  /// Rebuilds the library from the music folder (demo songs on web).
+  /// Rebuilds the library from the music folder (demo songs on web), and
+  /// tells the backend about songs it hasn't seen yet so the next sync sends them.
   Future<void> rescan() async {
     List<String> paths;
     if (MusicSync.supported) {
@@ -79,26 +83,36 @@ class Store extends ChangeNotifier {
         status = 'Can\'t read music folder: $e';
         paths = [];
       }
-      // A file that's on disk again (restored by resync) is no longer deleted.
-      deleted.removeAll(paths);
     } else {
-      paths = [for (final s in demoLibrary) if (!deleted.contains(s.path)) s.path];
+      paths = [for (final s in demoLibrary) s.path];
     }
     library
       ..clear()
       ..addAll(paths.map(Song.fromPath));
+    notifyListeners();
+    if (MusicSync.supported && !syncing) await _register(paths);
     _save();
     notifyListeners();
+  }
+
+  /// `add`s every song the backend doesn't know yet (not while syncing: the
+  /// backend can only do one thing at a time).
+  Future<void> _register(List<String> paths) async {
+    for (final p in paths) {
+      if (_known.contains(p)) continue;
+      if (await MusicSync.add(p)) {
+        _known.add(p);
+        _pending.add(p);
+      }
+    }
   }
 
   void _save() {
     _p?.setString('counts', jsonEncode(counts));
     _p?.setString('playlists', jsonEncode(playlists));
-    _p?.setStringList('deleted', deleted.toList());
+    _p?.setStringList('known', _known.toList());
+    _p?.setStringList('pending', _pending.toList());
     _p?.setInt('secs', totalSecs);
-    if (key != null) _p?.setString('key', key!);
-    _p?.setString('folder', folder);
-    _p?.setString('server', server);
   }
 
   // ---- stats
@@ -202,6 +216,7 @@ class Store extends ChangeNotifier {
   /// library. Returns a one-line summary for the user.
   Future<String> importSongs(List<String> paths) async {
     if (importing) return 'Already importing';
+    if (syncing) return 'Wait for the sync to finish, then import';
     importing = true;
     status = 'Importing ${paths.length} file(s)...';
     notifyListeners();
@@ -225,10 +240,14 @@ class Store extends ChangeNotifier {
 
   // ---- delete
   /// Deletes the song's file from the music folder and removes it from the
-  /// library, playlists and stats. Sync won't download it again until resync.
+  /// library, playlists and stats.
   Future<void> deleteSong(Song s) async {
+    if (syncing) {
+      status = 'Wait for the sync to finish before deleting songs';
+      notifyListeners();
+      return;
+    }
     library.remove(s);
-    deleted.add(s.path);
     counts.remove(s.path);
     for (final l in playlists.values) {
       l.remove(s.path);
@@ -249,7 +268,25 @@ class Store extends ChangeNotifier {
     } catch (e) {
       status = 'Couldn\'t delete ${s.title}: $e';
     }
+    _known.remove(s.path);
+    // A song still waiting to be sent sits in the backend's table by number;
+    // taking one out would leave the changes pointing at the wrong songs, so
+    // rebuild the table from the songs that are still pending.
+    if (_pending.remove(s.path)) await _rebuildIndex();
+    _save();
     notifyListeners();
+  }
+
+  /// Forgets the backend's table and changes, then adds the pending songs again.
+  Future<void> _rebuildIndex() async {
+    await MusicSync.resetIndex();
+    final still = <String>{};
+    for (final p in _pending) {
+      if (await MusicSync.add(p)) still.add(p);
+    }
+    _pending
+      ..clear()
+      ..addAll(still);
   }
 
   // ---- playlists
@@ -284,64 +321,68 @@ class Store extends ChangeNotifier {
   }
 
   // ---- sync
-  String _newKey() {
-    final r = Random.secure();
-    return List.generate(8, (_) => r.nextInt(10)).join();
-  }
-
-  void newKey() {
-    key = _newKey();
-    _save();
+  /// Makes a new key for this device (the backend saves it).
+  Future<void> newKey() async {
+    if (syncing) return;
+    key = await MusicSync.newKey() ?? key;
     status = 'New key - enter it on your other device, then press Sync on both';
     notifyListeners();
   }
 
-  void setFolder(String f) {
-    folder = f.trim();
-    rescan();
-  }
-
-  void setServer(String s) {
-    server = s.trim();
-    _save();
-    notifyListeners();
-  }
-
-  /// Pairs with the other device using [typed] (or the saved key) and
-  /// downloads every song it has that this device doesn't.
-  /// Deleted songs are skipped; use [resync] to get them back.
+  /// Pairs with the other device using [typed] (or the saved key), sends the
+  /// songs added since the last sync and downloads the ones it has.
   Future<void> connect(String typed) async {
     if (syncing) return;
     if (typed.isNotEmpty) key = typed;
-    key ??= _newKey();
-    _save();
+    if (key == null) {
+      await newKey();
+      if (key == null) return;
+    }
     syncing = true;
+    status = 'Starting...';
     notifyListeners();
+    // The backend's changes must match what we think is pending, or a sync
+    // could send the wrong songs (or stop on a song that's gone).
+    if (MusicSync.pendingAdds() != _pending.length) await _rebuildIndex();
+    var outcome = const SyncOutcome(message: '');
     try {
-      status = await MusicSync.sync(
+      outcome = await MusicSync.sync(
         key: key!,
-        folder: folder,
-        server: server,
-        skip: deleted,
         onStatus: (m) {
           status = m;
           notifyListeners();
         },
       );
     } on ArgumentError catch (e) {
-      status = e.message.toString();
+      outcome = SyncOutcome(message: e.message.toString());
     }
+    // Songs that arrived are the other device's: don't send them back.
+    _known.addAll(outcome.received);
+    if (outcome.completed && _pending.isNotEmpty) {
+      _pending.clear();
+      await MusicSync.resetIndex(); // everything pending has been delivered
+    }
+    status = outcome.message;
     syncing = false;
     await rescan();
   }
 
   Future<void> cancelSync() => MusicSync.cancel();
 
-  /// Syncs again, this time also downloading the deleted songs in [restore].
-  Future<void> resync(Set<String> restore) async {
-    deleted.removeAll(restore);
+  /// Sends every song in the library on the next sync (e.g. to a new device).
+  Future<void> sendAllAgain() async {
+    if (syncing) return;
+    _pending
+      ..clear()
+      ..addAll(library.map((s) => s.path));
+    await _rebuildIndex();
     _save();
+    status = '${_pending.length} song(s) will be sent on the next sync';
     notifyListeners();
-    await connect('');
   }
+
+  /// How many songs wait for the next sync.
+  int get pendingSongs => _pending.length;
+
+  Future<void> openMusicFolder() => MusicSync.openFolder(folder);
 }

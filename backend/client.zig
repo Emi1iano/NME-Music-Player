@@ -16,38 +16,8 @@ const CHAT_MODE: bool = false;
 
 var clientState: Networks.ClientState = undefined;
 var rx: Reliable.Rx = .{};
-const song_extensions = [_][]const u8{ ".mp3", ".opus", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".wma" };
+const song_extensions = [_][]const u8{ ".mp3", ".opus", ".flac" };
 const app_directory: []const u8 = "app/";
-
-/// Small text files in the working directory that the desktop app and this
-/// library share: server.txt, musicDir.txt, skip.txt (in) and status.txt,
-/// port.txt (out). Without them the defaults below apply, as before.
-const Config = struct {
-    /// Reads a whole file, trimmed; null if it's missing, empty or too big.
-    fn read(io: Io, name: []const u8, buf: []u8) ?[]const u8 {
-        const file = Io.Dir.cwd().openFile(io, name, .{}) catch return null;
-        defer file.close(io);
-        const n = file.readPositionalAll(io, buf, 0) catch return null;
-        if (n == buf.len) return null;
-        const text = std.mem.trim(u8, buf[0..n], " \t\r\n");
-        return if (text.len == 0) null else text;
-    }
-    fn write(io: Io, name: []const u8, text: []const u8) void {
-        const file = Io.Dir.cwd().createFile(io, name, .{}) catch return;
-        defer file.close(io);
-        file.writePositionalAll(io, text, 0) catch {};
-    }
-};
-
-/// Progress for the app to show, in "status.txt".
-const Status = struct {
-    fn set(io: Io, comptime fmt: []const u8, args: anytype) void {
-        var buf: [512]u8 = undefined;
-        const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
-        testPrint("{s}\n", .{text});
-        Config.write(io, "status.txt", text);
-    }
-};
 
 const Networks = struct {
     const ClientState = struct {
@@ -67,13 +37,11 @@ const Networks = struct {
             Relay,
         };
 
-        fn init(io: Io) !ClientState {
-            const server_ip = try getServerIp(io);
+        fn init(io: Io) ClientState {
             return .{
-                .client_socket = try getClientSocket(io),
-                .server_ip = server_ip,
-                .resolved_ip = server_ip,
-                .key = try NewFileManager.KeyStuff.getKey(io),
+                .client_socket = getClientSocket(io) catch unreachable,
+                .server_ip = getServerIp() catch unreachable,
+                .key = NewFileManager.KeyStuff.getKey(io) catch unreachable,
             };
         }
         fn deinit(self: *ClientState, io: Io) void {
@@ -113,14 +81,7 @@ const Networks = struct {
             }
             return client_socket;
         }
-        /// "server.txt" ("a.b.c.d:port") overrides the default server.
-        fn getServerIp(io: Io) !net.IpAddress {
-            var buf: [64]u8 = undefined;
-            if (Config.read(io, "server.txt", &buf)) |text| {
-                const i = std.mem.lastIndexOfScalar(u8, text, ':') orelse return error.BadServerAddress;
-                const port = std.fmt.parseInt(u16, text[i + 1 ..], 10) catch return error.BadServerAddress;
-                return try std.Io.net.IpAddress.parse(text[0..i], port);
-            }
+        fn getServerIp() !net.IpAddress {
             return try std.Io.net.IpAddress.parse("24.243.26.72", 5252);
         }
         fn parseRecieverIp(bytes: []const u8) ?net.IpAddress {
@@ -220,69 +181,20 @@ const Networks = struct {
         }
         fn start(io: Io) !void {
             var GlobalListeningThread = try std.Thread.spawn(.{}, listen, .{io});
-            defer {
-                stopListener(io);
-                GlobalListeningThread.join();
+
+            try sendInitialServerMessage(io);
+            try punching(io);
+            if (!clientState.should_disconnect) {
+                if (CHAT_MODE) {
+                    try clientStart(io);
+                } else {
+                    try Syncing.send(io);
+                }
             }
 
-            try waitForOtherClient(io);
-            try punching(io);
-            if (clientState.should_disconnect) return error.Disconnected;
-            if (CHAT_MODE) {
-                try clientStart(io);
-            } else {
-                try Syncing.run(io);
-            }
+            GlobalListeningThread.join();
         }
-        /// Sends the key to the server every 2s (which also keeps the server
-        /// from timing us out) until it pairs us with the other client.
-        fn waitForOtherClient(io: Io) !void {
-            Status.set(io, "Waiting for your other device to sync with key {s}...", .{clientState.key});
-            const started = Io.Timestamp.now(io, .awake);
-            while (!clientState.recieved_inital_info) {
-                if (clientState.should_disconnect) return error.Disconnected;
-                if (started.untilNow(io, .awake).toSeconds() >= 120) {
-                    Status.set(io, "No other device synced with key {s}", .{clientState.key});
-                    return error.NoOtherClient;
-                }
-                sendInitialServerMessage(io) catch {};
-                for (0..20) |_| {
-                    if (clientState.recieved_inital_info or clientState.should_disconnect) break;
-                    try io.sleep(.fromMilliseconds(100), .awake);
-                }
-            }
-        }
-        /// Tells the other client we're leaving, then wakes our own listener
-        /// (blocked in receive) with a TERMINATE sent to ourselves.
-        fn stopListener(io: Io) void {
-            if (clientState.recieved_inital_info) {
-                for (0..3) |_| sendTerminate(io) catch {};
-            }
-            var self = Io.net.IpAddress.parse("127.0.0.1", clientState.client_socket.address.getPort()) catch return;
-            clientState.client_socket.send(io, &self, &ClientCode.getByte(.TERMINATE)) catch {};
-        }
-        fn sendTerminate(io: Io) !void {
-            if (clientState.cliendMode == .P2P) {
-                try clientState.sendResolved(io, &ClientCode.getByte(.TERMINATE));
-            } else {
-                try clientState.sendResolved(io, &(ClientCode.getByte(.RELAY) ++ clientState.key ++ ClientCode.getByte(.TERMINATE)));
-            }
-        }
-        /// Packets from the other client come from its local or public address,
-        /// or from the server when relaying.
-        fn isOtherClient(from: net.IpAddress) bool {
-            if (clientState.cliendMode == .Relay) return from.eql(&clientState.server_ip);
-            if (clientState.reciever_local_ip) |ip| if (from.eql(&ip)) return true;
-            if (clientState.reciever_public_ip) |ip| if (from.eql(&ip)) return true;
-            return from.eql(&clientState.resolved_ip);
-        }
-        fn isLoopback(from: net.IpAddress) bool {
-            return switch (from) {
-                .ip4 => |a| a.bytes[0] == 127,
-                else => false,
-            };
-        }
-        fn listen(io: Io) void {
+        fn listen(io: Io) !void {
             var buffer: [1024]u8 = undefined;
 
             var gpa = std.heap.DebugAllocator(.{}).init;
@@ -293,16 +205,9 @@ const Networks = struct {
             defer group.cancel(io);
 
             while (true) {
-                // On Windows an ICMP "port unreachable" from an earlier send shows
-                // up as a receive error; it isn't fatal, so keep listening.
-                const message = clientState.client_socket.receive(io, &buffer) catch |err| switch (err) {
-                    error.Canceled => return,
-                    else => continue,
-                };
-                if (message.data.len == 0) continue;
+                const message = try clientState.client_socket.receive(io, &buffer);
                 const data = message.data[1..];
                 const code = ClientCode.getCode(message.data[0]);
-                if (clientState.recieved_inital_info and isOtherClient(message.from)) Syncing.Control.heardFromPeer(io);
 
                 switch (code) {
                     .INITIAL => {
@@ -310,8 +215,8 @@ const Networks = struct {
                             std.debug.print("Already initalized\n", .{});
                             continue;
                         }
-                        if (message.data.len == 13 and message.from.eql(&clientState.server_ip)) {
-                            clientState.parseInitialResponse(message.data[1..13].*) catch continue;
+                        if (message.data.len == 13) {
+                            try clientState.parseInitialResponse(message.data[1..13].*);
                             const p = clientState.reciever_public_ip.?.ip4.bytes;
                             var l: [4]u8 = .{ 0, 0, 0, 0 };
                             var lp: u16 = 0;
@@ -326,47 +231,37 @@ const Networks = struct {
                     .P2P => {
                         testPrint("P2P: {s}\n", .{message.data[1..]});
                         //clientState.reciever_local_ip.? = message.from;
-                        if (!clientState.recieved_inital_info or !isOtherClient(message.from)) continue;
                         clientState.resolved_ip = message.from;
                         if (clientState.reciever_local_ip) |ip| {
-                            clientState.client_socket.send(io, &ip, ClientCode.getByte(.ACK) ++ "LOCAL IP") catch {};
+                            try clientState.client_socket.send(io, &ip, ClientCode.getByte(.ACK) ++ "LOCAL IP");
                         } else {
-                            if (message.data.len >= 9 and eql(message.data[1..9], "LOCAL IP")) {
+                            if (eql(message.data[1..9], "LOCAL IP")) {
                                 clientState.reciever_local_ip = message.from;
                             }
                         }
-                        if (clientState.reciever_public_ip) |ip| {
-                            clientState.client_socket.send(io, &ip, ClientCode.getByte(.ACK) ++ "PUBLIC IP") catch {};
-                        }
+                        try clientState.client_socket.send(io, &clientState.reciever_public_ip.?, ClientCode.getByte(.ACK) ++ "PUBLIC IP");
                     },
                     .ACK => {
                         testPrint("ACK: {s}\n", .{message.data[1..]});
-                        if (acknowledged or !clientState.recieved_inital_info) continue;
-                        if (message.data.len >= 9 and std.mem.eql(u8, message.data[1..9], "LOCAL IP") and clientState.reciever_local_ip != null) {
+                        if (acknowledged) continue;
+                        if (std.mem.eql(u8, message.data[1..9], "LOCAL IP")) {
                             std.debug.print("USE LOCAL IP\n", .{});
                             clientState.resolved_ip = clientState.reciever_local_ip.?;
-                        } else if (message.data.len >= 10 and std.mem.eql(u8, message.data[1..10], "PUBLIC IP") and clientState.reciever_public_ip != null) {
+                        } else if (std.mem.eql(u8, message.data[1..10], "PUBLIC IP")) {
                             std.debug.print("USE PUBLIC IP\n", .{});
                             clientState.resolved_ip = clientState.reciever_public_ip.?;
                         }
                         acknowledged = true;
                     },
-                    .CHUNK => {
-                        if (!isOtherClient(message.from)) continue;
-                        rx.onChunk(io, gpa.allocator(), &group, data) catch |err| testPrint("chunk error: {s}\n", .{@errorName(err)});
-                    },
-                    .CHUNK_ACK => if (isOtherClient(message.from)) {
-                        if (Reliable.active_tx.load(.acquire)) |tx| tx.onAck(data);
-                    },
+                    .CHUNK => try rx.onChunk(io, gpa.allocator(), &group, data),
+                    .CHUNK_ACK => if (Reliable.active_tx.load(.acquire)) |tx| tx.onAck(data),
                     .NONE => {
                         std.debug.print("Code not handled: {b}: {s}\n", .{ message.data[0], message.data[1..] });
                     },
                     .TERMINATE => {
-                        // From the other client, or from the app (loopback) to cancel.
-                        if (!isOtherClient(message.from) and !isLoopback(message.from)) continue;
                         std.debug.print("Disconnected\n", .{});
                         clientState.should_disconnect = true;
-                        group.await(io) catch {};
+                        try group.await(io);
                         break;
                     },
                     else => std.debug.print("Not implemented yet!!: {any}\n", .{code}),
@@ -394,7 +289,7 @@ const Networks = struct {
             }
             fn getLocalIpWindows(io: std.Io) ![4]u8 {
                 var result: [4]u8 = undefined;
-                var child = try std.process.spawn(io, .{ .argv = &.{"ipconfig"}, .stdout = .pipe, .create_no_window = true });
+                var child = try std.process.spawn(io, .{ .argv = &.{"ipconfig"}, .stdout = .pipe });
 
                 var buffer: [1024]u8 = undefined;
                 var wbuffer: [1024 * 2]u8 = undefined;
@@ -489,12 +384,9 @@ const Syncing = struct {
             const string_id = try std.fmt.bufPrint(&id_buf, "{d:0>8}", .{e.id});
             switch (action) {
                 .Add => {
-                    if (e.id == 0 or e.id > music_table.file.list.items().len) continue;
                     const path = music_table.file.list.items()[e.id - 1].path;
                     const hash = music_table.file.list.items()[e.id - 1].hash;
-                    // Skip songs the other device has or deleted, and ones deleted here since the scan.
-                    if (Control.peerHas(io, Io.Dir.path.basename(path))) continue;
-                    const file = Io.Dir.openFileAbsolute(io, path, .{}) catch continue;
+                    const file = try Io.Dir.openFileAbsolute(io, path, .{});
                     defer file.close(io);
                     var buf: [1024 * 4]u8 = undefined;
                     var reader = file.reader(io, &buf);
@@ -502,15 +394,13 @@ const Syncing = struct {
                     const data = try r.allocRemaining(gpa.allocator(), .unlimited);
                     defer gpa.allocator().free(data);
 
-                    var header_buf: [1024]u8 = undefined;
+                    var header_buf: [256]u8 = undefined;
                     const base_path = Io.Dir.path.basename(path);
                     const header = try std.fmt.bufPrint(&header_buf, "{d:0>8}{s}{d:0>8}{s}{d:0>8}", .{ e.id, hash, base_path.len, base_path, data.len });
                     const blob = try std.mem.concat(gpa.allocator(), u8, &.{ header, data });
                     defer gpa.allocator().free(blob);
                     testPrint("Sending file {s}\n", .{base_path});
-                    Status.set(io, "Sending {s}", .{base_path});
                     try Reliable.send(io, gpa.allocator(), 0, blob);
-                    Control.sent += 1;
                     testPrint("Done sending\n", .{});
                 },
                 .Delete => try Reliable.send(io, gpa.allocator(), 1, string_id),
@@ -532,26 +422,12 @@ const Syncing = struct {
                 const content_len = stringToNum(try r.take(8));
                 if (content_len != r.buffered().len) {
                     testPrint("Recieved bytes doesnt match required length.\nShould be: {d} Got: {d}\n", .{ content_len, r.buffered().len });
-                    return error.LengthMismatch;
                 }
                 const content = r.buffered(); //r.take(content_len);
-                // The name comes from the other device: only a plain song file name is OK.
-                if (!isSafeFileName(name) or !NewFileManager.isSong(name)) return error.UnsafeFileName;
-                if (Control.skipThis(io, name)) return;
                 const music_dir = try NewFileManager.getMusicDir(io);
                 defer music_dir.close(io);
-                if (music_dir.access(io, name, .{})) |_| return else |_| {}
-
-                // Written under a temporary name so the app never sees a half song.
-                var part_buf: [512]u8 = undefined;
-                const part = try std.fmt.bufPrint(&part_buf, "{s}.part", .{name});
-                const file = try music_dir.createFile(io, part, .{ .read = true });
-                var closed = false;
-                var keep = false;
-                defer {
-                    if (!closed) file.close(io);
-                    if (!keep) music_dir.deleteFile(io, part) catch {};
-                }
+                const file = try music_dir.createFile(io, name, .{ .read = true });
+                defer file.close(io);
 
                 var buf: [1024 * 4]u8 = undefined;
                 var writer = file.writer(io, &buf);
@@ -562,15 +438,9 @@ const Syncing = struct {
                 const new_hash = try NewFileManager.Commands.Aux.hashFile(io, file);
                 if (!eql(hash, &new_hash)) {
                     testPrint("Hashes dont match\n{x}\n{x}\nRecieved {d:.2}% of bytes.\n", .{ hash, new_hash, @as(f32, @floatFromInt(content.len)) / @as(f32, @floatFromInt(content_len)) * 100});
-                    return error.HashMismatch;
+                } else {
+                    testPrint("Successfully recieved song {s}\n", .{name});
                 }
-                keep = true;
-                file.close(io);
-                closed = true;
-                try Io.Dir.rename(music_dir, part, music_dir, name, io);
-                _ = Control.received.fetchAdd(1, .monotonic);
-                Status.set(io, "Received {s}", .{name});
-                testPrint("Successfully recieved song {s}\n", .{name});
 
                 // try NewFileManager.Commands.Aux.addFile(io, file, , changes: *Changes)
             },
@@ -582,203 +452,6 @@ const Syncing = struct {
             },
         }
     }
-    /// A name that is only a file name: no folders, no drive, no "..".
-    fn isSafeFileName(name: []const u8) bool {
-        if (name.len == 0 or name.len > 255) return false;
-        if (eql(name, ".") or eql(name, "..")) return false;
-        for (name) |c| {
-            if (c < 32 or c == '/' or c == '\\' or c == ':') return false;
-        }
-        return true;
-    }
-    /// Both devices run this once paired: swap lists of the songs each already
-    /// has (or deleted), send the songs the other lacks, then say "done" and
-    /// wait for the other's "done". Everything goes through `Reliable`.
-    fn run(io: Io) !void {
-        Status.set(io, "Connected - comparing libraries...", .{});
-        Control.heardFromPeer(io); // pairing may have taken a while
-
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer arena.deinit();
-        const alloc = arena.allocator();
-
-        // Older versions of the app (e.g. the phone's) don't know these messages:
-        // they never answer the song list. Then we just send everything and wait
-        // for the other device to go quiet instead of for its "done".
-        var older_peer = false;
-        const have = try Control.collectHave(io, alloc);
-        Reliable.sendWithin(io, alloc, Control.ACTION_HAVE, have, Control.handshake_limit_ms) catch |err| switch (err) {
-            error.PeerUnresponsive => older_peer = true,
-            else => return err,
-        };
-        if (older_peer) {
-            testPrint("No answer to the song list: treating the other device as an older version\n", .{});
-        } else {
-            try Control.waitForPeer(io, .have);
-        }
-        try send(io);
-        if (older_peer) {
-            Status.set(io, "Waiting for the other device to finish...", .{});
-            return Control.waitForQuiet(io);
-        }
-
-        Reliable.send(io, alloc, Control.ACTION_DONE, "DONE") catch |err| {
-            // The other device may leave as soon as it got its copy.
-            if (err != error.PeerUnresponsive or !Control.flag(io, .done)) return err;
-        };
-        Status.set(io, "Finishing up...", .{});
-        try Control.waitForPeer(io, .done);
-    }
-    /// State shared between the main thread and the listener thread for the
-    /// messages around the song transfers (actions 3 and 4 of `Reliable`).
-    const Control = struct {
-        const ACTION_DONE = 3;
-        const ACTION_HAVE = 4;
-        const silence_limit_s = 20;
-        const handshake_limit_ms = 3000; // no ack of the song list within this: an older peer
-        const quiet_s = 5; // older peer: done once it's been silent this long
-        const have_limit_s = 60;
-        const alloc = std.heap.smp_allocator;
-
-        const Flag = enum { have, done };
-
-        var state_lock: Io.Mutex = .init;
-        var last_heard: Io.Timestamp = undefined;
-        var peer_have: []u8 = &.{};
-        var have_received = false;
-        var peer_done = false;
-        var skip_buf: [256 * 1024]u8 = undefined;
-        var skip_text: []const u8 = "";
-        var sent: usize = 0; // main thread only
-        var received: std.atomic.Value(usize) = .init(0);
-
-        /// Called at the start of every sync: this library stays loaded between them.
-        fn reset(io: Io) void {
-            state_lock.lockUncancelable(io);
-            alloc.free(peer_have);
-            peer_have = &.{};
-            have_received = false;
-            peer_done = false;
-            last_heard = Io.Timestamp.now(io, .awake);
-            state_lock.unlock(io);
-            sent = 0;
-            received.store(0, .monotonic);
-            skip_text = Config.read(io, "skip.txt", &skip_buf) orelse "";
-        }
-        fn heardFromPeer(io: Io) void {
-            state_lock.lockUncancelable(io);
-            defer state_lock.unlock(io);
-            last_heard = Io.Timestamp.now(io, .awake);
-        }
-        fn flag(io: Io, which: Flag) bool {
-            state_lock.lockUncancelable(io);
-            defer state_lock.unlock(io);
-            return switch (which) {
-                .have => have_received,
-                .done => peer_done,
-            };
-        }
-        /// Listener thread: handles a finished non-song transfer from the other device.
-        fn onMessage(io: Io, action: u8, data: []const u8) void {
-            switch (action) {
-                ACTION_DONE => {
-                    state_lock.lockUncancelable(io);
-                    defer state_lock.unlock(io);
-                    peer_done = true;
-                },
-                ACTION_HAVE => {
-                    const copy = alloc.dupe(u8, data) catch return;
-                    state_lock.lockUncancelable(io);
-                    defer state_lock.unlock(io);
-                    alloc.free(peer_have);
-                    peer_have = copy;
-                    have_received = true;
-                },
-                else => {},
-            }
-        }
-        fn checkConnected(io: Io) !void {
-            if (clientState.should_disconnect) return error.Disconnected;
-            state_lock.lockUncancelable(io);
-            const last = last_heard;
-            state_lock.unlock(io);
-            if (last.untilNow(io, .awake).toSeconds() >= silence_limit_s) {
-                Status.set(io, "Lost connection to the other device", .{});
-                return error.LostConnection;
-            }
-        }
-        /// For an older peer that never says "done": waits until it has sent nothing for a while.
-        fn waitForQuiet(io: Io) !void {
-            while (true) {
-                if (clientState.should_disconnect) return error.Disconnected;
-                state_lock.lockUncancelable(io);
-                const last = last_heard;
-                state_lock.unlock(io);
-                if (last.untilNow(io, .awake).toSeconds() >= quiet_s) return;
-                try io.sleep(.fromMilliseconds(100), .awake);
-            }
-        }
-        fn waitForPeer(io: Io, which: Flag) !void {
-            const started = Io.Timestamp.now(io, .awake);
-            while (!flag(io, which)) {
-                try checkConnected(io);
-                if (which == .have and started.untilNow(io, .awake).toSeconds() >= have_limit_s) {
-                    Status.set(io, "The other device didn't answer", .{});
-                    return error.LostConnection;
-                }
-                try io.sleep(.fromMilliseconds(100), .awake);
-            }
-        }
-        /// True if the other device already has (or deleted) a song called `name`.
-        fn peerHas(io: Io, name: []const u8) bool {
-            state_lock.lockUncancelable(io);
-            defer state_lock.unlock(io);
-            return hasName(peer_have, name);
-        }
-        /// True if the user deleted a song called `name` here (skip.txt).
-        fn skipThis(io: Io, name: []const u8) bool {
-            _ = io;
-            return hasName(skip_text, name);
-        }
-        /// Is `name` one of the lines (or the last path part of one)?
-        fn hasName(text: []const u8, name: []const u8) bool {
-            var it = std.mem.tokenizeAny(u8, text, "\r\n");
-            while (it.next()) |line| {
-                const base = if (std.mem.lastIndexOfAny(u8, line, "/\\")) |i| line[i + 1 ..] else line;
-                if (eql(base, name)) return true;
-            }
-            return false;
-        }
-        /// Names of the songs in the music folder, plus the deleted ones.
-        fn collectHave(io: Io, arena: std.mem.Allocator) ![]const u8 {
-            var list: std.ArrayList(u8) = .empty;
-            const dir = try NewFileManager.getMusicDir(io);
-            defer dir.close(io);
-            try addNames(io, arena, dir, &list);
-            var it = std.mem.tokenizeAny(u8, skip_text, "\r\n");
-            while (it.next()) |line| {
-                const base = if (std.mem.lastIndexOfAny(u8, line, "/\\")) |i| line[i + 1 ..] else line;
-                try list.appendSlice(arena, base);
-                try list.append(arena, '\n');
-            }
-            return list.items;
-        }
-        fn addNames(io: Io, arena: std.mem.Allocator, dir: Io.Dir, list: *std.ArrayList(u8)) !void {
-            var it = dir.iterate();
-            while (it.next(io) catch null) |e| switch (e.kind) {
-                .file => if (NewFileManager.isSong(e.name)) {
-                    try list.appendSlice(arena, e.name);
-                    try list.append(arena, '\n');
-                },
-                .directory => {
-                    var sub = dir.openDir(io, e.name, .{ .iterate = true }) catch continue;
-                    defer sub.close(io);
-                    try addNames(io, arena, sub, list);
-                },
-                else => {},
-            };
-        }
-    };
     fn threadWrapper(io: Io, alloc: std.mem.Allocator, data: []const u8, action: NewFileManager.Action) void {
         recieve(io, alloc, data, action) catch |err| {
             testPrint("Error recieving {any}", .{err});
@@ -792,8 +465,7 @@ const Reliable = struct {
     const RTO_TICKS = 200; // timeout, in ~1ms sleep ticks
     const FAST_RETX_TICKS = 20; // min gap between fast retransmits of one chunk
     const PACE = 64; // sleep 1ms after this many sends (avoids socket buffer overflow)
-    // Real time, not ticks: on Windows a 1 ms sleep takes ~15 ms, so counting ticks was ~15x too long.
-    const STALL_MS = 10_000; // give up if no progress for 10 s
+    const STALL_TICKS = 10_000; // give up if no progress for ~10s
     const NEVER = std.math.maxInt(u64);
     const MAX_TRANSFER = 1 << 30;
 
@@ -847,10 +519,6 @@ const Reliable = struct {
     /// Reliably deliver `blob`. Blocks until fully acked.
     /// Must run in a different task than the listen loop (which feeds onAck).
     pub fn send(io: Io, alloc: std.mem.Allocator, action: u8, blob: []const u8) !void {
-        return sendWithin(io, alloc, action, blob, STALL_MS);
-    }
-    /// Like `send`, but gives up after `stall_ms` milliseconds without progress.
-    pub fn sendWithin(io: Io, alloc: std.mem.Allocator, action: u8, blob: []const u8, stall_ms: i64) !void {
         const n: usize = @max(1, (blob.len + CHUNK - 1) / CHUNK);
         const acked = try alloc.alloc(u8, n);
         defer alloc.free(acked);
@@ -868,15 +536,14 @@ const Reliable = struct {
         var base: usize = 0;
         var tick: u64 = 0;
         var burst: usize = 0;
-        var progress_at = Io.Timestamp.now(io, .awake);
+        var stall: u64 = 0;
 
         while (true) {
             const old_base = base;
             while (base < n and @atomicLoad(u8, &acked[base], .acquire) == 1) base += 1;
             if (base == n) return;
-            if (clientState.should_disconnect) return error.Disconnected;
-            if (base != old_base) progress_at = Io.Timestamp.now(io, .awake);
-            if (progress_at.untilNow(io, .awake).toMilliseconds() > stall_ms) return error.PeerUnresponsive;
+            if (base != old_base) stall = 0 else stall += 1;
+            if (stall > STALL_TICKS) return error.PeerUnresponsive;
 
             const hi_end = tx.highest_end.load(.acquire);
             const end = @min(n, base + WINDOW);
@@ -981,24 +648,22 @@ const Reliable = struct {
             const n = self.got.len;
             if (self.count == n) {
                 const owned = self.buf;
-                const act: ?NewFileManager.Action = switch (self.action) {
+                const act: NewFileManager.Action = switch (self.action) {
                     0 => .Add,
                     1 => .Delete,
                     2 => .Rename,
-                    else => null,
+                    else => {
+                        alloc.free(owned);
+                        alloc.free(self.got);
+                        self.* = .{ .last_done = self.last_done, .last_done_n = self.last_done_n };
+                        return;
+                    },
                 };
-                const control_action = self.action;
                 alloc.free(self.got);
                 self.* = .{ .last_done = tid, .last_done_n = @intCast(n) };
                 try sendAck(io, tid, @intCast(n), &.{});
-                if (act) |a| {
-                    errdefer alloc.free(owned);
-                    try group.concurrent(io, Syncing.threadWrapper, .{ io, alloc, owned, a });
-                } else {
-                    // Not a library change: song list / done messages (see Syncing.Control).
-                    defer alloc.free(owned);
-                    Syncing.Control.onMessage(io, control_action, owned);
-                }
+                errdefer alloc.free(owned);
+                try group.concurrent(io, Syncing.threadWrapper, .{ io, alloc, owned, act });
                 return;
             }
 
@@ -1050,9 +715,7 @@ const NewFileManager = struct {
                     testPrint("scanning: {s}\n", .{e.?.name});
                     switch (e.?.kind) {
                         .file => {
-                            // Only songs: not the app's cover art, .part files and so on.
-                            if (!isSong(e.?.name)) continue;
-                            var file = dir.openFile(io, e.?.name, .{}) catch continue;
+                            var file = try dir.openFile(io, e.?.name, .{});
                             defer file.close(io);
                             try addFile(io, file, table, changes);
                         },
@@ -1066,7 +729,7 @@ const NewFileManager = struct {
                 } else |_| {}
             }
             fn addFile(io: Io, file: Io.File, table: *MusicTable, changes: *Changes) !void {
-                var buf: [1024]u8 = undefined;
+                var buf: [256]u8 = undefined;
                 const len = try file.realPath(io, &buf);
                 const hash = try hashFile(io, file);
                 const result: struct { bool, usize } = blk: for (table.file.list.items()) |e| {
@@ -1519,13 +1182,6 @@ const NewFileManager = struct {
         return cwd.openDir(io, app_dir_name, .{}) catch try cwd.createDirPathOpen(io, app_dir_name, .{});
     }
     fn getMusicDir(io: Io) !Io.Dir {
-        // "musicDir.txt" lets the app pick the folder (a path, absolute or relative to the working directory).
-        var path_buf: [1024]u8 = undefined;
-        if (Config.read(io, "musicDir.txt", &path_buf)) |path| {
-            const cwd = std.Io.Dir.cwd();
-            cwd.createDirPath(io, path) catch {};
-            return cwd.openDir(io, path, .{ .iterate = true });
-        }
         const music_dir_name = "music";
         const app_dir = try getAppDir(io);
         defer app_dir.close(io);
@@ -1707,16 +1363,8 @@ pub fn main(init: std.process.Init) !void {
     try start(init.io, args[1..]);
 }
 pub fn start(io: Io, args: []const [:0]const u8) !void {
-    // This library stays loaded between calls, so start each one from scratch.
     Networks.Client.acknowledged = false;
-    rx = .{};
-    Reliable.next_tid = 1;
-    Reliable.active_tx.store(null, .release);
-    Syncing.Control.reset(io);
-    clientState = Networks.ClientState.init(io) catch |err| {
-        Status.set(io, "Sync failed: {s}", .{@errorName(err)});
-        return err;
-    };
+    clientState = .init(io);
     defer clientState.deinit(io);
 
     var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -1748,11 +1396,11 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
 
     switch (args.len) {
         0 => {
-            try syncLibrary(io);
+            try Networks.Client.start(io);
         },
         1 => {
             if (eql(args[0], "sync")) {
-                try syncLibrary(io);
+                try Networks.Client.start(io);
             } else if (eql(args[0], "sync_new_key")) {
                 try NewFileManager.KeyStuff.writeKey(io, try NewFileManager.KeyStuff.generateNewKey(io));
             } else if (eql(args[0], "scan")) {
@@ -1769,7 +1417,7 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
                 try NewFileManager.KeyStuff.writeKey(io, key);
                 clientState.key = key;
 
-                try syncLibrary(io);
+                try Networks.Client.start(io);
             } else if (eql(args[0], "add")) {
                 try NewFileManager.Commands.add(io, args[1]);
             } else if (eql(args[0], "delete")) {
@@ -1787,31 +1435,6 @@ pub fn start(io: Io, args: []const [:0]const u8) !void {
             testPrint("Invalid args\n", .{});
         },
     }
-}
-
-/// Registers the songs in the music folder, connects with the other client
-/// and exchanges songs. Progress and the result go to status.txt; our UDP
-/// port goes to port.txt so the app can stop the sync by sending TERMINATE to it.
-fn syncLibrary(io: Io) !void {
-    var port_buf: [8]u8 = undefined;
-    Config.write(io, "port.txt", std.fmt.bufPrint(&port_buf, "{d}", .{clientState.client_socket.address.getPort()}) catch "");
-
-    Status.set(io, "Checking your music folder...", .{});
-    NewFileManager.Commands.scan(io) catch |err| {
-        Status.set(io, "Can't read the music folder: {s}", .{@errorName(err)});
-        return err;
-    };
-
-    Networks.Client.start(io) catch |err| {
-        switch (err) {
-            error.NoOtherClient, error.LostConnection => {}, // already explained
-            error.Disconnected => Status.set(io, "Sync stopped", .{}),
-            else => Status.set(io, "Sync failed: {s}", .{@errorName(err)}),
-        }
-        return err;
-    };
-    // Client.start has stopped the listener, so every song has been written.
-    Status.set(io, "Synced: received {d}, sent {d} song(s)", .{ Syncing.Control.received.load(.monotonic), Syncing.Control.sent });
 }
 
 var lock = std.Io.Mutex.init;
