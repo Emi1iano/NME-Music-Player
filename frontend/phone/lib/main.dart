@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
 import 'screens/home_shell.dart';
@@ -75,6 +76,7 @@ class _NmeMusicAppState extends State<NmeMusicApp> {
   void initState() {
     super.initState();
     Appearance.instance.addListener(_appearanceChanged);
+    HardwareKeyboard.instance.addHandler(_onKey);
     // Save listening stats right away when the app goes to the background.
     _lifecycle = AppLifecycleListener(
       onPause: () {
@@ -93,8 +95,20 @@ class _NmeMusicAppState extends State<NmeMusicApp> {
   @override
   void dispose() {
     Appearance.instance.removeListener(_appearanceChanged);
+    HardwareKeyboard.instance.removeHandler(_onKey);
     _lifecycle.dispose();
     super.dispose();
+  }
+
+  /// Spacebar plays/pauses (a keyboard on the PC, or one plugged into a
+  /// phone), unless you're typing in a text box such as search.
+  bool _onKey(KeyEvent event) {
+    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.space) return false;
+    final focused = FocusManager.instance.primaryFocus?.context?.widget;
+    if (focused is EditableText) return false; // a space for the text box
+    if (Player.instance.currentTrack == null) return false; // nothing loaded
+    Player.instance.togglePlay();
+    return true; // handled: don't also "press" the focused button
   }
 
   /// A Settings → Appearance option changed (e.g. the accent color): rebuild
