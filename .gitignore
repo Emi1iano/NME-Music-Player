@@ -7,3 +7,6 @@ backend/tree.zig
 backend/simple/testing2/app/
 backend/simple/.zig-cache/
 backend/simple/zig-out/bin/
+backend/simple1/.zig-cache/
+backend/simple1/testing2/app/
+backend/simple1/zig-out/bin/
