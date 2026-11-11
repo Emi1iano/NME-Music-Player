@@ -722,6 +722,7 @@ const FileManager = struct {
 };
 const Syncing = struct {
     o_hashes: myEvent(Hashes) = .init(),
+    o_changes: o_Changes = .{},
     start_sending: std.Io.Event = .unset,
     gpa: std.heap.ArenaAllocator,
 
@@ -730,8 +731,11 @@ const Syncing = struct {
 
         try FileManager.loadSongs(io, &songs, self.gpa.allocator());
         std.debug.print("Loaded {d} songs\n", .{songs.items.len});
+        var changes = FileManager.Changes.init(io);
+        defer changes.deinit();
+        try changes.start();
 
-        // SEND HASHES
+        // WAIT FOR OTHER CLIENT
         {
             if (!self.start_sending.isSet()) std.debug.print("\n", .{});
             var count: usize = 0;
@@ -749,6 +753,26 @@ const Syncing = struct {
                     i += 1;
                 }
                 count += 1;
+            }
+        }
+
+        // SEND CHANGES
+        {
+            try w.writeInt(u32, @intCast(changes.set.count()), .little);
+            var it = changes.set.iterator();
+            while (it.next()) |h| {
+                try w.writeByte(@backingInt(h.value_ptr.*));
+                try w.writeAll(h.key_ptr);
+            }
+            try w.flush();
+        }
+
+        // SEND HASHES
+        {
+            try self.o_changes.initialized.wait(io);
+            for (0..self.o_changes.len()) |i| {
+                const e = self.o_changes.get(i).?;
+                std.debug.print("Got change: {any} {x}\n", .{e.change, e.hash});
             }
             std.debug.print("Sending Hashes\n", .{});
 
@@ -821,6 +845,14 @@ const Syncing = struct {
             }
         }
 
+        // GET CHANGES
+        {
+            const n = try r.takeInt(u32, .little);
+            const buf = try r.readAlloc(self.gpa.allocator(), n * 33);
+            self.o_changes.buf = buf;
+            self.o_changes.initialized.set(io);
+        }
+
         // GET OTHER CLIENTS HASHES
         {
             const n = try r.takeInt(u32, .little);
@@ -873,6 +905,31 @@ const Syncing = struct {
             std.debug.print("Time took: {d:.1} seconds\n", .{@as(f64, @floatFromInt(s.untilNow(io, .awake).toMilliseconds())) / 1000});
         }
     }
+    const o_Changes = struct {
+        buf: []const u8 = undefined,
+        initialized: Io.Event = .unset,
+        const Entry = struct {
+            hash: []const u8,
+            change: FileManager.Changes.Change,
+        };
+        fn init(buf: []const u8) @This() {
+            return .{
+                .buf = buf,
+            };
+        }
+        /// null is returned if idx is out of bounds
+        fn get(self: *@This(), idx: usize) ?Entry {
+            const i: usize = idx * 33;
+            if (self.buf.len < i) return null;
+            return .{
+                .change = @fromBackingInt(self.buf[i]),
+                .hash = self.buf[i + 1 .. i + 33],
+            };
+        }
+        fn len(self: *@This()) usize {
+            return self.buf.len / 33;
+        }
+    };
     const Hashes = struct {
         buf: []const u8,
         fn init(buf: []const u8) @This() {
