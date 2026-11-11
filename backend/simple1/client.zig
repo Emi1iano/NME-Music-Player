@@ -4,7 +4,8 @@ const Io = std.Io;
 const net = Io.net;
 
 //TODO make music table take less space by shortening paths
-//TODO stats, rename, delete
+//TODO stats
+//TODO commit the changes
 const CHAT_MODE = false;
 
 const app_path = "testing2/app";
@@ -444,6 +445,57 @@ const FileManager = struct {
             return dir.openDir(io, "removed", .{}) catch try dir.createDirPathOpen(io, "removed", .{});
         }
     };
+    const Rename = struct {
+        fn rename(io: Io, old: []const u8, new: []const u8) !void {
+            // CHECKS
+            {
+                if (!Io.Dir.path.isAbsolute(old)) {
+                    std.debug.print("Path is not absolute\n", .{});
+                    return;
+                }
+                const stat = try Io.Dir.cwd().statFile(io, old, .{});
+                if (stat.kind != .file) {
+                    std.debug.print("Path is not a file\n", .{});
+                    return;
+                }
+            }
+            var changes = Changes.init(io);
+            defer changes.deinit();
+            try changes.start();
+            var table = MusicTable.init(io);
+            defer table.deinit();
+            try table.start();
+            
+            const hash: [32]u8 = blk: {
+                var file = try Io.Dir.openFileAbsolute(io, old, .{});
+                defer file.close(io);
+                break :blk try Add.hashFile(io, file);
+            };
+            const r1 = try changes.set.getOrPut(hash);
+            if (r1.found_existing) {
+                //FIXME
+                std.debug.print("Only one action allowed per song right now\n", .{});
+                return;
+            } else {
+                r1.value_ptr.* = .Rename;
+            }
+            const r2 = table.set.getPtr(hash);
+            if (r2 == null) {
+                std.debug.print("Song not found in table\n", .{});
+                return;
+            }
+            const new_path = try Io.Dir.path.join(table.arena.allocator(), &.{Io.Dir.path.dirname(old).?, new});
+            r2.?.*.path = new_path;
+            
+            const old_name = Io.Dir.path.basename(old);
+            const old_dir = try Io.Dir.openDirAbsolute(io, Io.Dir.path.dirname(old).?, .{});
+
+            try Io.Dir.rename(old_dir, old_name, old_dir, new, io);
+            
+            try changes.write();
+            try table.write();
+        }
+    };
     const Key = struct {
         fn saveKey(io: Io, buf: []const u8) !void {
             var file = try getKeyFile(io);
@@ -825,8 +877,11 @@ pub fn start(io: std.Io, args: []const []const u8) !void {
                 try FileManager.Delete_Remove.delete(io, args[1]);
             } else if (eql("remove", args[0])) {
                 try FileManager.Delete_Remove.remove(io, args[1]);
-            } else if (eql("rename", args[0])) {
-                std.debug.print("TODO renaming\n", .{});
+            }
+        },
+        3 => {
+            if (eql("rename", args[0])) {
+                try FileManager.Rename.rename(io, args[1], args[2]);
             }
         },
         else => {},
