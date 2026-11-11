@@ -4,6 +4,7 @@ const Io = std.Io;
 const net = Io.net;
 
 //TODO make music table take less space by shortening paths
+//TODO stats, rename, delete
 const CHAT_MODE = false;
 
 const app_path = "testing2/app";
@@ -88,7 +89,7 @@ const FileManager = struct {
         arena: std.heap.ArenaAllocator,
         io: Io,
         file: Io.File,
-        
+
         const SetType = std.AutoHashMap([32]u8, MusicEntry);
         const MusicEntry = struct {
             path: []const u8,
@@ -107,9 +108,9 @@ const FileManager = struct {
             self.set.deinit();
             self.arena.deinit();
         }
-        fn start(self:  *@This()) !void {
+        fn start(self: *@This()) !void {
             self.set = .init(self.arena.allocator());
-            
+
             var buf: [1024 * 64]u8 = undefined;
             var reader = self.file.reader(self.io, &buf);
             var r = &reader.interface;
@@ -143,11 +144,84 @@ const FileManager = struct {
         fn print(self: *@This()) void {
             var it = self.set.iterator();
             while (it.next()) |e| {
-                std.debug.print("{x}: {s}\n", .{e.key_ptr.*, Io.Dir.path.basename(e.value_ptr.path)});
+                std.debug.print("{x}: {s}\n", .{ e.key_ptr.*, Io.Dir.path.basename(e.value_ptr.path) });
             }
         }
         fn getFile(io: Io) Io.File {
             return getOrCreateFile(io, "music_table.txt") catch unreachable;
+        }
+        fn clearFile(io: Io) !void {
+            const file = getFile(io);
+            var w = file.writer(io, &.{});
+            try w.end();
+            file.close(io);
+        }
+    };
+    const Changes = struct {
+        set: SetType,
+        arena: std.heap.ArenaAllocator,
+        io: Io,
+        file: Io.File,
+
+        const SetType = std.AutoHashMap([32]u8, Change);
+        const Change = enum(u8) {
+            Delete,
+            Remove,
+            Rename,
+        };
+        fn init(io: Io) @This() {
+            return .{
+                .set = undefined,
+                .arena = .init(std.heap.page_allocator),
+                .io = io,
+                .file = getFile(io),
+            };
+        }
+        fn deinit(self: *@This()) void {
+            self.set.deinit();
+            self.arena.deinit();
+        }
+        fn start(self: *@This()) !void {
+            self.set = .init(self.arena.allocator());
+
+            var buf: [1024 * 64]u8 = undefined;
+            var reader = self.file.reader(self.io, &buf);
+            var r = &reader.interface;
+            var hash_buf: [32]u8 = undefined;
+            while (true) {
+                const byte = r.takeInt(u8, .little) catch break;
+                try r.readSliceAll(&hash_buf);
+
+                const result = try self.set.getOrPut(hash_buf);
+                if (result.found_existing) continue;
+                result.value_ptr.* = @fromBackingInt(byte);
+            }
+        }
+        fn write(self: *@This()) !void {
+            var buf: [1024 * 4]u8 = undefined;
+            var writer = self.file.writer(self.io, &buf);
+            const w = &writer.interface;
+            var it = self.set.iterator();
+            while (it.next()) |e| {
+                try w.writeInt(u8, @backingInt(e.value_ptr.*), .little);
+                try w.writeAll(e.key_ptr);
+            }
+            try writer.end();
+        }
+        fn print(self: *@This()) void {
+            var it = self.set.iterator();
+            while (it.next()) |e| {
+                std.debug.print("{any}: {x}\n", .{ @fromBackingInt(e.value_ptr.*), e.key_ptr });
+            }
+        }
+        fn getFile(io: Io) Io.File {
+            return getOrCreateFile(io, "changes.txt") catch unreachable;
+        }
+        fn clearFile(io: Io) !void {
+            const file = getFile(io);
+            var w = file.writer(io, &.{});
+            try w.end();
+            file.close(io);
         }
     };
     fn getAppDir(io: Io) !Io.Dir {
@@ -167,9 +241,7 @@ const FileManager = struct {
             var table = MusicTable.init(io);
             defer table.deinit();
             try table.start();
-            // table.print();
-            // std.debug.print("---------------------\n", .{});
-            
+
             switch (std.mem.eql(u8, "", std.Io.Dir.path.extension(path))) {
                 true => {
                     const dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }) catch |err| switch (err) {
@@ -194,9 +266,12 @@ const FileManager = struct {
                     try addFile(io, file, &table);
                 },
             }
-            
+
             try group.await(io);
             try table.write();
+        }
+        fn addAddPath(io: Io, path: []const u8) !void {
+            try add(io, path);
             try Paths.add(io, path);
         }
         fn addRecurse(io: std.Io, dir: std.Io.Dir, table: *MusicTable) !void {
@@ -238,11 +313,10 @@ const FileManager = struct {
 
             try lock.lock(io);
             const result = try table.set.getOrPut(hash);
-            // std.debug.print("{x}: {s} ", .{hash, Io.Dir.path.basename(path)});
             if (result.found_existing) {
-                std.debug.print("Already In Table: {s}\n", .{std.Io.Dir.path.basename(path)});
+                std.debug.print("\x1B[31mAlready In Table: {s}\x1B[0m\n", .{std.Io.Dir.path.basename(path)});
             } else {
-                std.debug.print("added: {s}\n", .{std.Io.Dir.path.basename(path)});
+                std.debug.print("\x1B[32mAdded: {s}\x1B[0m\n", .{std.Io.Dir.path.basename(path)});
                 result.value_ptr.play_count = 0;
                 result.value_ptr.play_time = 0;
                 result.value_ptr.path = try table.arena.allocator().dupe(u8, path);
@@ -292,6 +366,82 @@ const FileManager = struct {
             var w = table_f.writer(io, &.{});
             try w.end();
             table_f.close(io);
+        }
+    };
+    const Delete_Remove = struct {
+        // add delete to changes
+        // when syncing if the hash is recieved from other client then say song is had to not request it
+        // after sending all songs send the command to delete the hash
+        fn delete(io: Io, path: []const u8) !void {
+            try delete_remove(io, path, .Delete);
+        }
+        fn remove(io: Io, path: []const u8) !void {
+            try delete_remove(io, path, .Remove);
+        }
+        fn delete_remove(io: Io, path: []const u8, change: Changes.Change) !void {
+            // CHECKS
+            {
+                if (!Io.Dir.path.isAbsolute(path)) {
+                    std.debug.print("Path is not absolute\n", .{});
+                    return;
+                }
+                const stat = try Io.Dir.cwd().statFile(io, path, .{});
+                if (stat.kind != .file) {
+                    std.debug.print("Path is not a file\n", .{});
+                    return;
+                }
+                if (change != .Delete and change != .Remove) return;
+            }
+            var changes = Changes.init(io);
+            defer changes.deinit();
+            try changes.start();
+            var table = MusicTable.init(io);
+            defer table.deinit();
+            try table.start();
+
+            const hash: [32]u8 = blk: {
+                var file = try Io.Dir.openFileAbsolute(io, path, .{});
+                defer file.close(io);
+                break :blk try Add.hashFile(io, file);
+            };
+            const r1 = try changes.set.getOrPut(hash);
+            if (r1.found_existing) {
+                //FIXME
+                std.debug.print("Only one action allowed per song right now\n", .{});
+                return;
+            } else {
+                r1.value_ptr.* = change;
+            }
+            const r2 = table.set.remove(hash);
+            if (!r2) {
+                std.debug.print("Song not found in table\n", .{});
+                return;
+            }
+            switch (change) {
+                .Delete => {
+                    try Io.Dir.deleteFileAbsolute(io, path);
+                },
+                .Remove => {
+                    var dir = try getRemoveDir(io);
+                    defer dir.close(io);
+                    const basename = Io.Dir.path.basename(path);
+                    const old_dir = try Io.Dir.openDirAbsolute(io, Io.Dir.path.dirname(path).?, .{});
+
+                    try Io.Dir.rename(old_dir, basename, dir, basename, io);
+                },
+                else => {
+                    std.debug.print("Not implemented\n", .{});
+                    return;
+                },
+            }
+
+            try changes.write();
+            try table.write();
+        }
+        fn getRemoveDir(io: Io) !Io.Dir {
+            var dir = try getAppDir(io);
+            defer dir.close(io);
+            return dir.openDir(io, "removed", .{}) catch try dir.createDirPathOpen(io, "removed", .{});
         }
     };
     const Key = struct {
@@ -396,6 +546,12 @@ const FileManager = struct {
             defer gpa.deinit();
             var list = try std.ArrayList([]const u8).initCapacity(gpa.allocator(), 4);
             try Paths.idK(io, gpa.allocator(), &list);
+
+            var music_dir = try getMusicDir(io);
+            defer music_dir.close(io);
+            var buf: [1024]u8 = undefined;
+            const len = try music_dir.realPath(io, &buf);
+            try Add.add(io, buf[0..len]);
 
             for (list.items) |line| {
                 try Add.add(io, line);
@@ -551,13 +707,13 @@ const Syncing = struct {
             var table = FileManager.MusicTable.init(io);
             defer table.deinit();
             try table.start();
-            
+
             var music_dir = try FileManager.getMusicDir(io);
             defer music_dir.close(io);
             const s = Io.Timestamp.now(io, .awake);
             var total: usize = 0;
             var group = std.Io.Group.init;
-            
+
             std.debug.print("\n\n\n", .{});
             while (true) {
                 const b_len = r.takeInt(u64, .little) catch |err| switch (err) {
@@ -648,14 +804,15 @@ pub fn start(io: std.Io, args: []const []const u8) !void {
             if (eql("sync", args[0])) {
                 try Client.client(io, try FileManager.Key.getKey(io, &buf));
             } else if (eql("resettable", args[0])) {
-                try FileManager.Add.clearTable(io);
+                try FileManager.MusicTable.clearFile(io);
             } else if (eql("sync_new_key", args[0])) {
                 try FileManager.Key.saveKey(io, &FileManager.Key.generateNewKey(io));
             } else if (eql("resetpaths", args[0])) {
                 try FileManager.Paths.clearPathsFile(io);
             } else if (eql("rescan", args[0])) {
-                try FileManager.Add.clearTable(io);
                 try FileManager.Rescan.rescan(io);
+            } else if (eql("resetchanges", args[0])) {
+                try FileManager.Changes.clearFile(io);
             }
         },
         2 => {
@@ -663,7 +820,13 @@ pub fn start(io: std.Io, args: []const []const u8) !void {
                 try FileManager.Key.saveKey(io, args[1]);
                 try Client.client(io, args[1]);
             } else if (eql("add", args[0])) {
-                try FileManager.Add.add(io, args[1]);
+                try FileManager.Add.addAddPath(io, args[1]);
+            } else if (eql("delete", args[0])) {
+                try FileManager.Delete_Remove.delete(io, args[1]);
+            } else if (eql("remove", args[0])) {
+                try FileManager.Delete_Remove.remove(io, args[1]);
+            } else if (eql("rename", args[0])) {
+                std.debug.print("TODO renaming\n", .{});
             }
         },
         else => {},
