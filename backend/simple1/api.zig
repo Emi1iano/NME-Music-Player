@@ -4,11 +4,14 @@ const lib = @import("client.zig");
 // add [path] - path needs to be absolute, can be a path to a file or directory. adds path to path.txt
 // sync [key] - key is optional, if key isnt provided load cache for key else generate new key then attempt to connect
 //              FOR AI - key can be any length and any characters now but keep what you have the same that being 8bytes between '0'-'9'
-// sync_new_key - generates new key without connecting
-// rescan - clears music_table.txt and scans all paths in paths.txt and adds them to music_table.txt
+// sync_new_key - generates new key without connecting.
+// rescan - scans all paths in paths.txt and adds them to music_table.txt. does music dir in app dir by default.
+// rename [path] [new name] - path needs to be absolute and a file. new name needs the extension.
+// remove [path] - path needs to be absolute and a file. Moves the file to a removed directory.
+// delete [path] - path needs to be absolute and a file. Deletes the file.
 // resetpaths - clears cache for paths.txt
 // resettable - clears cache for music_table.txt
-// FOR AI - dont care about the fact that rename, delete and remove commands dont exist
+// resetchanges - clears cache for changes.txt
 
 export fn clientAPI(string: [*:0]const u8) callconv(.c) i32 {
     const buf: []const u8 = std.mem.span(string);
