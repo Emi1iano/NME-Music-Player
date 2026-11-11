@@ -4,7 +4,7 @@ const Io = std.Io;
 const net = Io.net;
 
 //TODO make music table take less space by shortening paths
-//TODO stats
+//TODO use the default music dirs of respective os windows - /users/$USER/Music android - /Music?
 //TODO commit the changes
 const CHAT_MODE = false;
 
@@ -147,6 +147,18 @@ const FileManager = struct {
             while (it.next()) |e| {
                 std.debug.print("{x}: {s}\n", .{ e.key_ptr.*, Io.Dir.path.basename(e.value_ptr.path) });
             }
+        }
+        fn printStats(self: *@This()) void {
+            var it = self.set.iterator();
+            while (it.next()) |e| {
+                std.debug.print("Count: {d: >4}, Time: {d: >4} | {s}\n", .{ e.value_ptr.play_count, e.value_ptr.play_time, Io.Dir.path.basename(e.value_ptr.path) });
+            }
+        }
+        fn printStatsNow(io: Io) !void {
+            var table = MusicTable.init(io);
+            defer table.deinit();
+            try table.start();
+            table.printStats();
         }
         fn getFile(io: Io) Io.File {
             return getOrCreateFile(io, "music_table.txt") catch unreachable;
@@ -465,7 +477,7 @@ const FileManager = struct {
             var table = MusicTable.init(io);
             defer table.deinit();
             try table.start();
-            
+
             const hash: [32]u8 = blk: {
                 var file = try Io.Dir.openFileAbsolute(io, old, .{});
                 defer file.close(io);
@@ -484,15 +496,78 @@ const FileManager = struct {
                 std.debug.print("Song not found in table\n", .{});
                 return;
             }
-            const new_path = try Io.Dir.path.join(table.arena.allocator(), &.{Io.Dir.path.dirname(old).?, new});
+            const new_path = try Io.Dir.path.join(table.arena.allocator(), &.{ Io.Dir.path.dirname(old).?, new });
             r2.?.*.path = new_path;
-            
+
             const old_name = Io.Dir.path.basename(old);
             const old_dir = try Io.Dir.openDirAbsolute(io, Io.Dir.path.dirname(old).?, .{});
 
             try Io.Dir.rename(old_dir, old_name, old_dir, new, io);
-            
+
             try changes.write();
+            try table.write();
+        }
+    };
+    const Stat = struct {
+        const Which = enum(u1) {
+            Time,
+            Count,
+        };
+        fn update(io: Io, path: []const u8, which_: []const u8, amount_: []const u8) !void {
+            try base(io, path, which_, amount_, false);
+        }
+        fn set(io: Io, path: []const u8, which_: []const u8, amount_: []const u8) !void {
+            try base(io, path, which_, amount_, true);
+        }
+        fn base(io: Io, path: []const u8, which_: []const u8, amount_: []const u8, idk: bool) !void {
+            // CHECKS
+            {
+                if (!Io.Dir.path.isAbsolute(path)) {
+                    std.debug.print("Path is not absolute\n", .{});
+                    return;
+                }
+                const stat = try Io.Dir.cwd().statFile(io, path, .{});
+                if (stat.kind != .file) {
+                    std.debug.print("Path is not a file\n", .{});
+                    return;
+                }
+            }
+            var table = MusicTable.init(io);
+            defer table.deinit();
+            try table.start();
+
+            const hash: [32]u8 = blk: {
+                var file = try Io.Dir.openFileAbsolute(io, path, .{});
+                defer file.close(io);
+                break :blk try Add.hashFile(io, file);
+            };
+
+            const r1 = table.set.getPtr(hash);
+            if (r1 == null) {
+                std.debug.print("Song not found\n", .{});
+                return;
+            }
+            const which = if (eql(which_, "time")) Which.Time else if (eql(which_, "count")) Which.Count else {
+                std.debug.print("Invalid command \'{s}\'\n", .{which_});
+                return;
+            };
+            const amount = std.fmt.parseInt(u32, amount_, 10) catch {
+                std.debug.print("Invalid value \'{s}\'\n", .{amount_});
+                return;
+            };
+            if (idk) {
+                //set
+                switch (which) {
+                    .Count => r1.?.*.play_count = amount,
+                    .Time => r1.?.*.play_time = amount,
+                }
+            } else {
+                //update
+                switch (which) {
+                    .Count => r1.?.*.play_count += amount,
+                    .Time => r1.?.*.play_time += amount,
+                }
+            }
             try table.write();
         }
     };
@@ -865,6 +940,8 @@ pub fn start(io: std.Io, args: []const []const u8) !void {
                 try FileManager.Rescan.rescan(io);
             } else if (eql("resetchanges", args[0])) {
                 try FileManager.Changes.clearFile(io);
+            } else if (eql("printstats", args[0])) {
+                try FileManager.MusicTable.printStatsNow(io);
             }
         },
         2 => {
@@ -882,6 +959,20 @@ pub fn start(io: std.Io, args: []const []const u8) !void {
         3 => {
             if (eql("rename", args[0])) {
                 try FileManager.Rename.rename(io, args[1], args[2]);
+            }
+        },
+        4 => {
+            if (eql("stat", args[0])) {
+                try FileManager.Stat.update(io, args[1], args[2], args[3]);
+            }
+        },
+        5 => {
+            if (eql("stat", args[0])) {
+                if (!eql("set", args[2])) {
+                    std.debug.print("Invalid args\n", .{});
+                    return;
+                }
+                try FileManager.Stat.set(io, args[1], args[3], args[4]);
             }
         },
         else => {},

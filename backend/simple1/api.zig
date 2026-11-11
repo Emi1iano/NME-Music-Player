@@ -9,9 +9,12 @@ const lib = @import("client.zig");
 // rename [path] [new name] - path needs to be absolute and a file. new name needs the extension.
 // remove [path] - path needs to be absolute and a file. Moves the file to a removed directory.
 // delete [path] - path needs to be absolute and a file. Deletes the file.
+// stat [path] [type] [amount] - path is absolute to a file, type can be 'count' or 'time', amount has to be a positive value 'u32', adds to music_table.txt stats.
+// stat [path] set [type] [amount] - same as above but using keyword 'set' will set the type to the amount in music_table.txt.
 // resetpaths - clears cache for paths.txt
 // resettable - clears cache for music_table.txt
 // resetchanges - clears cache for changes.txt
+// printstats - prints all stats in music_table.txt
 
 export fn clientAPI(string: [*:0]const u8) callconv(.c) i32 {
     const buf: []const u8 = std.mem.span(string);
