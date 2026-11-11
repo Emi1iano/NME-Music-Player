@@ -902,6 +902,7 @@ const Syncing = struct {
                 std.debug.print("\x1B[2KSpeed {d:.2}MB/S\n", .{bps / 1000000});
             }
             try group.await(io);
+            try table.write();
             std.debug.print("Time took: {d:.1} seconds\n", .{@as(f64, @floatFromInt(s.untilNow(io, .awake).toMilliseconds())) / 1000});
         }
     }
