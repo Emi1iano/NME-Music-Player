@@ -127,8 +127,6 @@ const Relay = struct {
         var writer = to.writer(io, &wbuf);
         const w = &writer.interface;
 
-        _ = w.write("STARTSENDING") catch return;
-        w.flush() catch return;
         while (true) {
             _ = from.stream(w, .unlimited) catch break; // EndOfStream / Canceled / error
             w.flush() catch break;
