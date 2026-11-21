@@ -7,6 +7,7 @@ const net = Io.net;
 //TODO use the default music dirs of respective os windows - /users/$USER/Music android - /Music?
 //TODO commit stats
 //TODO unremove songs
+//TODO remove all uses of realPath
 const CHAT_MODE = false;
 
 const app_path = "testing2/app";
@@ -125,6 +126,16 @@ const FileManager = struct {
                 result.value_ptr.* = .{ .path = try self.arena.allocator().dupe(u8, path_.?), .play_count = count, .play_time = time, .flags = flags };
             }
         }
+        /// allocates path to table
+        fn addEntry(self: *@This(), key: [32]u8, path: []const u8) !void {
+            const e = try self.set.getOrPut(key);
+            if (e.found_existing) {
+                std.debug.print("\x1B[31mAlready In Table: {s}\x1B[0m\n", .{std.Io.Dir.path.basename(path)});
+            } else {
+                std.debug.print("\x1B[32mAdded: {s}\x1B[0m\n", .{std.Io.Dir.path.basename(path)});
+                e.value_ptr.* = .{ .flags = 0, .play_count = 0, .play_time = 0, .path = try self.arena.allocator().dupe(u8, path) };
+            }
+        }
         fn write(self: *@This()) !void {
             var buf: [1024 * 4]u8 = undefined;
             var writer = self.file.writer(self.io, &buf);
@@ -149,7 +160,8 @@ const FileManager = struct {
         fn printStats(self: *@This()) void {
             var it = self.set.iterator();
             while (it.next()) |e| {
-                std.debug.print("Count: {d: >4}, Time: {d: >4} | {s}\n", .{ e.value_ptr.play_count, e.value_ptr.play_time, Io.Dir.path.basename(e.value_ptr.path) });
+                const flags = if (e.value_ptr.flags & 0b1 == 1) "Removed" else "";
+                std.debug.print("Count: {d: >4}, Time: {d: >4} | {s} {s}\n", .{ e.value_ptr.play_count, e.value_ptr.play_time, Io.Dir.path.basename(e.value_ptr.path), flags });
             }
         }
         fn printStatsNow(io: Io) !void {
@@ -261,9 +273,16 @@ const FileManager = struct {
             var table = MusicTable.init(io);
             defer table.deinit();
             try table.start();
+            const stat = Io.Dir.statFile(Io.Dir.cwd(), io, path, .{}) catch |err| switch (err) {
+                error.FileNotFound => {
+                    std.debug.print("File from path not found\n", .{});
+                    return;
+                },
+                else => return err,
+            };
 
-            switch (std.mem.eql(u8, "", std.Io.Dir.path.extension(path))) {
-                true => {
+            switch (stat.kind) {
+                .directory => {
                     const dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }) catch |err| switch (err) {
                         error.FileNotFound => {
                             std.debug.print("Directory from path not found\n", .{});
@@ -274,7 +293,7 @@ const FileManager = struct {
                     defer dir.close(io);
                     try addRecurse(io, dir, &table);
                 },
-                false => {
+                .file => {
                     if (!isSong(path)) return;
                     const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| switch (err) {
                         error.FileNotFound => {
@@ -285,6 +304,7 @@ const FileManager = struct {
                     };
                     try addFile(io, file, &table);
                 },
+                else => {},
             }
 
             try group.await(io);
@@ -410,7 +430,8 @@ const FileManager = struct {
                     error.FileNotFound => {
                         std.debug.print("File from path not found", .{});
                         return;
-                    }, else => return err,
+                    },
+                    else => return err,
                 };
                 if (stat.kind != .file) {
                     std.debug.print("Path is not a file\n", .{});
@@ -486,7 +507,8 @@ const FileManager = struct {
                     error.FileNotFound => {
                         std.debug.print("File from path not found", .{});
                         return;
-                    }, else => return err,
+                    },
+                    else => return err,
                 };
                 if (stat.kind != .file) {
                     std.debug.print("Path is not a file\n", .{});
@@ -552,7 +574,8 @@ const FileManager = struct {
                     error.FileNotFound => {
                         std.debug.print("File from path not found", .{});
                         return;
-                    }, else => return err,
+                    },
+                    else => return err,
                 };
                 if (stat.kind != .file) {
                     std.debug.print("Path is not a file\n", .{});
@@ -1002,9 +1025,12 @@ const Syncing = struct {
 
             var music_dir = try FileManager.getMusicDir(io);
             defer music_dir.close(io);
+            var path_buf: [1024]u8 = undefined;
+            const music_dir_path = try music_dir.realPath(io, &path_buf);
+            path_buf[music_dir_path] = Io.Dir.path.sep;
+
             const s = Io.Timestamp.now(io, .awake);
             var total: usize = 0;
-            var group = std.Io.Group.init;
 
             std.debug.print("\n\n\n", .{});
             while (true) {
@@ -1012,21 +1038,32 @@ const Syncing = struct {
                     error.EndOfStream => break,
                     else => return err,
                 };
-                var basename_buf: [255]u8 = undefined;
-                const basename = basename_buf[0..@intCast(b_len)];
+                const basename = path_buf[music_dir_path + 1 ..][0..@intCast(b_len)];
                 try r.readSliceAll(basename);
 
                 const f_len = try r.takeInt(u64, .little);
 
                 var file = try music_dir.createFile(io, basename, .{ .read = true });
-                var buf: [1024 * 64]u8 = undefined;
-                var writer = file.writer(io, &buf);
+                defer file.close(io);
+                var writer = file.writer(io, &.{});
                 const w = &writer.interface;
+                {
+                    var hash: [32]u8 = undefined;
+                    var b = std.crypto.hash.Blake3.init(.{});
+                    var remaining: usize = f_len;
 
-                _ = try r.streamExact64(w, f_len);
-                total += f_len;
-                try writer.end();
-                try group.concurrent(io, FileManager.Add.addFileThreadWrapper, .{ io, file, &table });
+                    while (remaining > 0) {
+                        const n: usize = @intCast(@min(r.buffer.len, remaining));
+                        const chunk = try r.take(n);
+                        b.update(chunk);
+                        try w.writeAll(chunk);
+                        remaining -= n;
+                    }
+                    b.final(&hash);
+                    try table.addEntry(hash, path_buf[0 .. music_dir_path + basename.len + 1]);
+                    total += f_len;
+                    try writer.end();
+                }
 
                 std.debug.print("\x1B[2F\x1B[2KRecieved: {d} bytes: {s}\n", .{ f_len, basename });
                 const elapsed_ns: u64 = @intCast(s.untilNow(io, .awake).toNanoseconds());
@@ -1034,7 +1071,6 @@ const Syncing = struct {
                 const bps = @as(f64, @floatFromInt(total)) / secs;
                 std.debug.print("\x1B[2KSpeed {d:.2}MB/S\n", .{bps / 1000000});
             }
-            try group.await(io);
             try table.write();
             std.debug.print("Time took: {d:.1} seconds\n", .{@as(f64, @floatFromInt(s.untilNow(io, .awake).toMilliseconds())) / 1000});
         }
