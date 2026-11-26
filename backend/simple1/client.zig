@@ -8,6 +8,7 @@ const net = Io.net;
 //TODO commit stats
 //TODO unremove songs
 //TODO remove all uses of realPath
+//TODO if file from path from musictable doesnt exist remove it from musictable - move stats to other temperary place
 const CHAT_MODE = false;
 
 const app_path = "testing2/app";
@@ -47,10 +48,13 @@ const Client = struct {
         } else {
             const gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer gpa.deinit();
-            var sync: Syncing = .{ .gpa = gpa };
+            var sync: Syncing = .{ .gpa = gpa, .songs = FileManager.MusicTable.init(io) };
+            try sync.songs.start();
+            defer sync.songs.deinit();
             try clients.concurrent(io, Syncing.recieveWrap, .{ &sync, io, r });
             try sync.sending(io, w, stream);
             try clients.await(io);
+            try sync.songs.write();
         }
     }
     const ChatMode = struct {
@@ -85,12 +89,16 @@ const FileManager = struct {
         arena: std.heap.ArenaAllocator,
         io: Io,
         file: Io.File,
+        // index -> client id
+        header: [16]?u32 = @splat(null),
 
         const SetType = std.AutoHashMap([32]u8, MusicEntry);
         const MusicEntry = struct {
             path: []const u8,
-            play_count: u32,
-            play_time: u32,
+            this_play_count: u32,
+            this_play_time: u32,
+            play_count: [16]?u32,
+            play_time: [16]?u32,
             // 0b1 represents its in removed folder
             flags: u8,
         };
@@ -113,17 +121,36 @@ const FileManager = struct {
             var reader = self.file.reader(self.io, &buf);
             var r = &reader.interface;
             var hash_buf: [32]u8 = undefined;
+            // reading header
+            var idx: usize = 0;
+            {
+                while (true) {
+                    const byte = r.peekByte() catch break;
+                    if (byte == '\n') {
+                        r.toss(1);
+                        break;
+                    }
+                    self.header[idx] = try r.takeInt(u32, .little);
+                    idx += 1;
+                }
+            }
             while (true) {
-                const flags = r.takeByte() catch break;
-                try r.readSliceAll(&hash_buf);
-                const count = try r.takeInt(u32, .little);
-                const time = try r.takeInt(u32, .little);
+                r.readSliceAll(&hash_buf) catch break;
+                const flags = try r.takeByte();
+                const this_count = try r.takeInt(u32, .little);
+                const this_time = try r.takeInt(u32, .little);
+                var count: [16]?u32 = @splat(null);
+                var time: [16]?u32 = @splat(null);
+                for (0..idx) |x| {
+                    count[x] = try r.takeInt(u32, .little);
+                    time[x] = try r.takeInt(u32, .little);
+                }
                 const path_ = try r.takeDelimiter('\n');
                 if (path_ == null) return error.BadFile;
 
                 const result = try self.set.getOrPut(hash_buf);
                 if (result.found_existing) continue;
-                result.value_ptr.* = .{ .path = try self.arena.allocator().dupe(u8, path_.?), .play_count = count, .play_time = time, .flags = flags };
+                result.value_ptr.* = .{ .path = try self.arena.allocator().dupe(u8, path_.?), .play_count = count, .play_time = time, .flags = flags, .this_play_count = this_count, .this_play_time = this_time };
             }
         }
         /// allocates path to table
@@ -133,19 +160,36 @@ const FileManager = struct {
                 std.debug.print("\x1B[31mAlready In Table: {s}\x1B[0m\n", .{std.Io.Dir.path.basename(path)});
             } else {
                 std.debug.print("\x1B[32mAdded: {s}\x1B[0m\n", .{std.Io.Dir.path.basename(path)});
-                e.value_ptr.* = .{ .flags = 0, .play_count = 0, .play_time = 0, .path = try self.arena.allocator().dupe(u8, path) };
+                e.value_ptr.* = .{ .flags = 0, .play_count = @splat(null), .play_time = @splat(null), .this_play_count = 0, .this_play_time = 0, .path = try self.arena.allocator().dupe(u8, path) };
             }
         }
         fn write(self: *@This()) !void {
             var buf: [1024 * 4]u8 = undefined;
             var writer = self.file.writer(self.io, &buf);
             const w = &writer.interface;
+            {
+                for (self.header) |x| {
+                    if (x == null) break;
+                    try w.writeInt(u32, x.?, .little);
+                }
+                try w.writeByte('\n');
+            }
             var it = self.set.iterator();
             while (it.next()) |e| {
-                try w.writeByte(e.value_ptr.flags);
                 try w.writeAll(e.key_ptr);
-                try w.writeInt(u32, e.value_ptr.play_count, .little);
-                try w.writeInt(u32, e.value_ptr.play_time, .little);
+                try w.writeByte(e.value_ptr.flags);
+                try w.writeInt(u32, e.value_ptr.this_play_count, .little);
+                try w.writeInt(u32, e.value_ptr.this_play_time, .little);
+                for (self.header, e.value_ptr.play_count, e.value_ptr.play_time) |i, x, y| {
+                    if (i == null) break;
+                    if (x == null or y == null) {
+                        try w.writeInt(u32, 0, .little);
+                        try w.writeInt(u32, 0, .little);
+                    } else {
+                        try w.writeInt(u32, x.?, .little);
+                        try w.writeInt(u32, y.?, .little);
+                    }
+                }
                 try w.writeAll(e.value_ptr.path);
                 try w.writeByte('\n');
             }
@@ -160,8 +204,14 @@ const FileManager = struct {
         fn printStats(self: *@This()) void {
             var it = self.set.iterator();
             while (it.next()) |e| {
-                const flags = if (e.value_ptr.flags & 0b1 == 1) "Removed" else "";
-                std.debug.print("Count: {d: >4}, Time: {d: >4} | {s} {s}\n", .{ e.value_ptr.play_count, e.value_ptr.play_time, Io.Dir.path.basename(e.value_ptr.path), flags });
+                const m = e.value_ptr;
+                const flags = if (m.flags & 0b1 == 1) "Removed" else "";
+                std.debug.print("Count: {d: >4}, Time: {d: >4} ", .{ m.this_play_count, m.this_play_time });
+                for (m.play_count, m.play_time, 0..) |x, y, i| {
+                    if (x == null or y == null) break;
+                    std.debug.print("Client: {d}- Count: {d: >4}, Time: {d: >4} ", .{ self.header[i].?, x.?, y.? });
+                }
+                std.debug.print("| {s} {s}\n", .{ Io.Dir.path.basename(m.path), flags });
             }
         }
         fn printStatsNow(io: Io) !void {
@@ -172,6 +222,38 @@ const FileManager = struct {
         }
         fn getFile(io: Io) Io.File {
             return getOrCreateFile(io, "music_table.txt") catch unreachable;
+        }
+        fn clearFile(io: Io) !void {
+            const file = getFile(io);
+            var w = file.writer(io, &.{});
+            try w.end();
+            file.close(io);
+        }
+    };
+    const ClientId = struct {
+        fn getId(io: Io) u32 {
+            var file = getFile(io);
+            defer file.close(io);
+
+            var buf: [4]u8 = undefined;
+            var reader = file.reader(io, &buf);
+            var r = &reader.interface;
+
+            return r.takeInt(u32, .little) catch 0;
+        }
+        fn writeId(io: Io, id: u32) !void {
+            var file = getFile(io);
+            defer file.close(io);
+
+            var buf: [4]u8 = undefined;
+            var writer = file.writer(io, &buf);
+            var w = &writer.interface;
+
+            try w.writeInt(u32, id, .little);
+            try w.flush();
+        }
+        fn getFile(io: Io) Io.File {
+            return getOrCreateFile(io, "client_id.txt") catch unreachable;
         }
         fn clearFile(io: Io) !void {
             const file = getFile(io);
@@ -352,16 +434,7 @@ const FileManager = struct {
             file.close(io);
 
             try lock.lock(io);
-            const result = try table.set.getOrPut(hash);
-            if (result.found_existing) {
-                std.debug.print("\x1B[31mAlready In Table: {s}\x1B[0m\n", .{std.Io.Dir.path.basename(path)});
-            } else {
-                std.debug.print("\x1B[32mAdded: {s}\x1B[0m\n", .{std.Io.Dir.path.basename(path)});
-                result.value_ptr.flags = 0;
-                result.value_ptr.play_count = 0;
-                result.value_ptr.play_time = 0;
-                result.value_ptr.path = try table.arena.allocator().dupe(u8, path);
-            }
+            try table.addEntry(hash, path);
             lock.unlock(io);
         }
         fn hashFile(io: std.Io, file: std.Io.File) ![32]u8 {
@@ -594,7 +667,7 @@ const FileManager = struct {
 
             const r1 = table.set.getPtr(hash);
             if (r1 == null) {
-                std.debug.print("Song not found\n", .{});
+                std.debug.print("Song not found in table\n", .{});
                 return;
             }
             const which = if (eql(which_, "time")) Which.Time else if (eql(which_, "count")) Which.Count else {
@@ -608,14 +681,14 @@ const FileManager = struct {
             if (idk) {
                 //set
                 switch (which) {
-                    .Count => r1.?.*.play_count = amount,
-                    .Time => r1.?.*.play_time = amount,
+                    .Count => r1.?.*.this_play_count = amount,
+                    .Time => r1.?.*.this_play_time = amount,
                 }
             } else {
                 //update
                 switch (which) {
-                    .Count => r1.?.*.play_count += amount,
-                    .Time => r1.?.*.play_time += amount,
+                    .Count => r1.?.*.this_play_count += amount,
+                    .Time => r1.?.*.this_play_time += amount,
                 }
             }
             try table.write();
@@ -750,21 +823,28 @@ const FileManager = struct {
     }
 };
 const Syncing = struct {
-    o_hashes: myEvent(Hashes) = .init(),
+    o_data: o_Data = .{},
     o_changes: o_Changes = .{},
+    songs: FileManager.MusicTable, 
+    done_sending: Io.Event = .unset,
     start_sending: std.Io.Event = .unset,
     gpa: std.heap.ArenaAllocator,
+    id: u32 = 0,
 
     fn sending(self: *@This(), io: Io, w: *Io.Writer, stream: net.Stream) !void {
-        var songs = FileManager.MusicTable.init(io);
-        try songs.start();
-        defer songs.deinit();
-
-        std.debug.print("Loaded {d} songs\n", .{songs.set.count()});
+        std.debug.print("Loaded {d} songs\n", .{self.songs.set.count()});
 
         var changes = FileManager.Changes.init(io);
         defer changes.deinit();
         try changes.start();
+
+        // SEND INITAL MESSAGE (client id)
+        {
+            const id = FileManager.ClientId.getId(io);
+            self.id = id;
+            try w.writeInt(u32, id, .little);
+            try w.flush();
+        }
 
         // WAIT FOR OTHER CLIENT
         {
@@ -797,7 +877,7 @@ const Syncing = struct {
                 try w.writeByte(@backingInt(h.value_ptr.*));
                 try w.writeAll(h.key_ptr);
                 if (h.value_ptr.* == .Rename) {
-                    const song = songs.set.get(h.key_ptr.*);
+                    const song = self.songs.set.get(h.key_ptr.*);
                     if (song == null) {
                         std.debug.print("HOW???\n", .{});
                         unreachable;
@@ -811,7 +891,7 @@ const Syncing = struct {
             it = changes.set.iterator();
             while (it.next()) |h| {
                 if (h.value_ptr.* == .Rename) {
-                    const song = songs.set.get(h.key_ptr.*);
+                    const song = self.songs.set.get(h.key_ptr.*);
                     if (song == null) continue;
                     const name = Io.Dir.path.basename(song.?.path);
                     try w.writeInt(u32, @intCast(name.len), .little);
@@ -840,12 +920,12 @@ const Syncing = struct {
                     .Delete => if (e) |n| switch (n) {
                         .Delete => {},
                         .Remove, .Rename => {
-                            const song = songs.set.fetchRemove(o_e.hash[0..32].*);
+                            const song = self.songs.set.fetchRemove(o_e.hash[0..32].*);
                             if (song == null) continue;
                             try Io.Dir.deleteFileAbsolute(io, song.?.value.path);
                         },
                     } else {
-                        const song = songs.set.fetchRemove(o_e.hash[0..32].*);
+                        const song = self.songs.set.fetchRemove(o_e.hash[0..32].*);
                         if (song == null) {
                             std.debug.print("Song not found to delete\n", .{});
                             continue;
@@ -855,7 +935,7 @@ const Syncing = struct {
                     .Remove => if (e) |n| switch (n) {
                         .Delete, .Remove => {},
                         .Rename => {
-                            const song = songs.set.getPtr(o_e.hash[0..32].*);
+                            const song = self.songs.set.getPtr(o_e.hash[0..32].*);
                             if (song == null) continue;
                             var dir = try FileManager.Delete_Remove.getRemoveDir(io);
                             defer dir.close(io);
@@ -865,10 +945,10 @@ const Syncing = struct {
 
                             try Io.Dir.rename(old_dir, basename, dir, basename, io);
                             song.?.flags |= 0b1;
-                            song.?.path = try dir.realPathFileAlloc(io, basename, songs.arena.allocator());
+                            song.?.path = try dir.realPathFileAlloc(io, basename, self.songs.arena.allocator());
                         },
                     } else {
-                        const song = songs.set.getPtr(o_e.hash[0..32].*);
+                        const song = self.songs.set.getPtr(o_e.hash[0..32].*);
                         if (song == null) continue;
                         var dir = try FileManager.Delete_Remove.getRemoveDir(io);
                         defer dir.close(io);
@@ -878,15 +958,15 @@ const Syncing = struct {
 
                         try Io.Dir.rename(old_dir, basename, dir, basename, io);
                         song.?.flags |= 0b1;
-                        song.?.path = try dir.realPathFileAlloc(io, basename, songs.arena.allocator());
+                        song.?.path = try dir.realPathFileAlloc(io, basename, self.songs.arena.allocator());
                     },
                     .Rename => if (e) |n| switch (n) {
                         .Delete => {},
                         .Remove => {
-                            const song = songs.set.getPtr(o_e.hash[0..32].*);
+                            const song = self.songs.set.getPtr(o_e.hash[0..32].*);
                             if (song == null) continue;
                             const old = song.?.path;
-                            const new_path = try Io.Dir.path.join(songs.arena.allocator(), &.{ Io.Dir.path.dirname(old).?, new });
+                            const new_path = try Io.Dir.path.join(self.songs.arena.allocator(), &.{ Io.Dir.path.dirname(old).?, new });
                             song.?.path = new_path;
 
                             const old_name = Io.Dir.path.basename(old);
@@ -899,10 +979,10 @@ const Syncing = struct {
                             std.debug.print("RESOLVE WHICH RENAME WINS\n", .{});
                         },
                     } else {
-                        const song = songs.set.getPtr(o_e.hash[0..32].*);
+                        const song = self.songs.set.getPtr(o_e.hash[0..32].*);
                         if (song == null) continue;
                         const old = song.?.path;
-                        const new_path = try Io.Dir.path.join(songs.arena.allocator(), &.{ Io.Dir.path.dirname(old).?, new });
+                        const new_path = try Io.Dir.path.join(self.songs.arena.allocator(), &.{ Io.Dir.path.dirname(old).?, new });
                         song.?.path = new_path;
 
                         const old_name = Io.Dir.path.basename(old);
@@ -919,10 +999,13 @@ const Syncing = struct {
         {
             std.debug.print("Sending Hashes\n", .{});
 
-            try w.writeInt(u32, @intCast(songs.set.count()), .little);
-            var it = songs.set.iterator();
+            try w.writeInt(u32, self.id, .little);
+            try w.writeInt(u32, @intCast(self.songs.set.count()), .little);
+            var it = self.songs.set.iterator();
             while (it.next()) |song| {
                 try w.writeAll(song.key_ptr);
+                try w.writeInt(u32, song.value_ptr.this_play_count, .little);
+                try w.writeInt(u32, song.value_ptr.this_play_time, .little);
             }
             try w.flush();
         }
@@ -930,12 +1013,12 @@ const Syncing = struct {
         var d_songs: Songs_R = try .initCapacity(self.gpa.allocator(), 8);
         // FIND DIFFERING HASHES
         {
-            try self.o_hashes.wait(io);
-            std.debug.print("Hashes Recieved: {d}\n", .{self.o_hashes.data.len()});
-            var it = songs.set.iterator();
+            try self.o_data.initialized.wait(io);
+            std.debug.print("Hashes Recieved: {d}\n", .{self.o_data.len()});
+            var it = self.songs.set.iterator();
             while (it.next()) |*song| {
-                for (0..self.o_hashes.data.len()) |i| {
-                    if (std.mem.eql(u8, song.key_ptr, self.o_hashes.data.get(i).?)) break;
+                for (0..self.o_data.len()) |i| {
+                    if (std.mem.eql(u8, song.key_ptr, self.o_data.get(i).?.hash)) break;
                 } else {
                     try d_songs.append(self.gpa.allocator(), song.value_ptr);
                 }
@@ -967,9 +1050,8 @@ const Syncing = struct {
             }
             try w.flush();
         }
-
         try stream.shutdown(io, .send);
-        try songs.write();
+        self.done_sending.set(io);
         try FileManager.Changes.clearFile(io);
     }
     fn recieveWrap(self: *@This(), io: Io, r: *Io.Reader) void {
@@ -978,7 +1060,16 @@ const Syncing = struct {
         };
     }
     fn recieving(self: *@This(), io: Io, r: *Io.Reader) !void {
-        // WAIT FOR INITIAL MESSAGE
+        //CLIENT ID
+        {
+            const id = try r.takeInt(u32, .little);
+            if (id != 0) {
+                try FileManager.ClientId.writeId(io, id);
+                self.id = id;
+            }
+        }
+
+        // WAIT FOR OTHER CLIENT
         {
             _ = try r.takeByte();
             self.start_sending.set(io);
@@ -1007,22 +1098,21 @@ const Syncing = struct {
 
         // GET OTHER CLIENTS HASHES
         {
+            const o_id = try r.takeInt(u32, .little);
             const n = try r.takeInt(u32, .little);
-            const buf = try r.readAlloc(self.gpa.allocator(), n * 32);
-            self.o_hashes.data.buf = buf;
+            const buf = try r.readAlloc(self.gpa.allocator(), n * 40);
+            self.o_data.buf = buf;
+            self.o_data.o_id = o_id;
             // for (0..self.o_hashes.data.len()) |i| {
             //     const e = self.o_hashes.data.get(i).?;
             //     std.debug.print("hashes: {x}\n", .{ e });
             // }
-            self.o_hashes.set(io);
+            
+            self.o_data.initialized.set(io);
         }
 
         // RECIEVE SONGS
         {
-            var table = FileManager.MusicTable.init(io);
-            defer table.deinit();
-            try table.start();
-
             var music_dir = try FileManager.getMusicDir(io);
             defer music_dir.close(io);
             var path_buf: [1024]u8 = undefined;
@@ -1031,6 +1121,16 @@ const Syncing = struct {
 
             const s = Io.Timestamp.now(io, .awake);
             var total: usize = 0;
+
+            var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer gpa.deinit();
+            var alloc = gpa.allocator();
+            const Entry = struct {
+                hash: [32]u8,
+                basename: []const u8,
+            };
+            var list: std.ArrayList(Entry) = .empty;
+            defer list.deinit(alloc);
 
             std.debug.print("\n\n\n", .{});
             while (true) {
@@ -1060,7 +1160,7 @@ const Syncing = struct {
                         remaining -= n;
                     }
                     b.final(&hash);
-                    try table.addEntry(hash, path_buf[0 .. music_dir_path + basename.len + 1]);
+                    try list.append(alloc, .{.hash = hash, .basename = try alloc.dupe(u8, basename)});
                     total += f_len;
                     try writer.end();
                 }
@@ -1071,8 +1171,31 @@ const Syncing = struct {
                 const bps = @as(f64, @floatFromInt(total)) / secs;
                 std.debug.print("\x1B[2KSpeed {d:.2}MB/S\n", .{bps / 1000000});
             }
-            try table.write();
+            try self.done_sending.wait(io);
+            for (list.items) |i| {
+                @memcpy(path_buf[music_dir_path+1..music_dir_path+1+i.basename.len], i.basename);
+                try self.songs.addEntry(i.hash, path_buf[0..music_dir_path+i.basename.len+1]);
+            }
             std.debug.print("Time took: {d:.1} seconds\n", .{@as(f64, @floatFromInt(s.untilNow(io, .awake).toMilliseconds())) / 1000});
+        }
+        
+        // IMPORT STATS FROM OTHER CLIENT
+        {
+            const idx = for (self.songs.header, 0..) |x, i| {
+                if (x == null) {
+                    self.songs.header[i] = self.o_data.o_id;
+                    break i;
+                }
+                if (self.o_data.o_id == x.?) break i;
+            } else return;
+            for (0..self.o_data.len()) |i| {
+                const d = self.o_data.get(i);
+                if (d == null) break;
+                const re = self.songs.set.getPtr(d.?.hash[0..32].*);
+                if (re == null) continue;
+                re.?.*.play_count[idx] = d.?.count;
+                re.?.*.play_time[idx] = d.?.time;
+            }
         }
     }
     const o_Changes = struct {
@@ -1091,7 +1214,7 @@ const Syncing = struct {
         /// null is returned if idx is out of bounds
         fn get(self: *@This(), idx: usize) ?Entry {
             const i: usize = idx * 33;
-            if (self.buf.len < i) return null;
+            if (self.buf.len < i + 33) return null;
             return .{
                 .change = @fromBackingInt(self.buf[i]),
                 .hash = self.buf[i + 1 .. i + 33],
@@ -1111,41 +1234,29 @@ const Syncing = struct {
             return r.peek(a_len) catch return null;
         }
     };
-    const Hashes = struct {
-        buf: []const u8,
-        fn init(buf: []const u8) @This() {
+    const o_Data = struct {
+        buf: []const u8 = undefined,
+        initialized: Io.Event = .unset,
+        o_id: u32 = undefined,
+        const Entry = struct {
+            hash: []const u8,
+            count: u32,
+            time: u32,
+        };
+        /// null is returned if idx is out of bounds
+        fn get(self: *@This(), idx: usize) ?Entry {
+            const i: usize = idx * 40;
+            if (self.buf.len < i + 40) return null;
             return .{
-                .buf = buf,
+                .hash = self.buf[i .. i + 32],
+                .count = std.mem.readInt(u32, self.buf[i + 32 .. i + 36][0..4], .little),
+                .time = std.mem.readInt(u32, self.buf[i + 36 .. i + 40][0..4], .little),
             };
         }
-        /// null is returned if idx is out of bounds
-        fn get(self: *@This(), idx: usize) ?[]const u8 {
-            const i: usize = idx * 32;
-            if (self.buf.len < i) return null;
-            return self.buf[i .. i + 32];
-        }
         fn len(self: *@This()) usize {
-            return self.buf.len / 32;
+            return self.buf.len / 40;
         }
     };
-    fn myEvent(comptime T: type) type {
-        return struct {
-            data: T,
-            event: std.Io.Event,
-            fn init() @This() {
-                return .{
-                    .data = undefined,
-                    .event = .unset,
-                };
-            }
-            fn wait(self: *@This(), io: Io) !void {
-                return self.event.wait(io);
-            }
-            fn set(self: *@This(), io: Io) void {
-                self.event.set(io);
-            }
-        };
-    }
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -1157,6 +1268,7 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(alloc);
     defer alloc.free(args[0..]);
 
+    printio = init.io;
     try start(init.io, args[1..]);
 }
 pub fn start(io: std.Io, args: []const []const u8) !void {
@@ -1194,6 +1306,11 @@ pub fn start(io: std.Io, args: []const []const u8) !void {
                 try FileManager.Delete_Remove.delete(io, args[1]);
             } else if (eql("remove", args[0])) {
                 try FileManager.Delete_Remove.remove(io, args[1]);
+            } else if (eql("update", args[0])) {
+                if (eql("backend", args[1])) {
+                    try FileManager.MusicTable.clearFile(io);
+                    try FileManager.Rescan.rescan(io);
+                }
             }
         },
         3 => {
@@ -1233,4 +1350,11 @@ fn cin(io: Io, buffer: []u8) []u8 {
 }
 fn eql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
+}
+var printlock: Io.Mutex = .init;
+var printio: Io = undefined;
+fn print(comptime fmt: []const u8, args: anytype) void {
+    printlock.lockUncancelable(printio);
+    std.debug.print(fmt, args);
+    printlock.unlock(printio);
 }

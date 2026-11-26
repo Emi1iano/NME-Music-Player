@@ -16,6 +16,7 @@ const lib = @import("client.zig");
 // resetchanges - clears cache for changes.txt
 // printstats - prints all stats in music_table.txt
 // printchanges - prints all staged changes
+// update backend - must be ran when updating to new client backend
 
 export fn clientAPI(string: [*:0]const u8) callconv(.c) i32 {
     const buf: []const u8 = std.mem.span(string);
